@@ -234,8 +234,22 @@ const CONTROLS = [
    { k:'accelerate', t:'Accelerate from the initial airspeed', kind:'check', v:0,
      hint:'Off, the airspeed slider is a fixed boundary condition. On, it becomes a state: ' +
           'the vehicle accelerates under thrust minus pressure drag, burns propellant, and ' +
-          'shuts down when the tanks are dry. Gravity and flight-path angle are not modelled, ' +
-          'so this is the axial force balance only.' },
+          'shuts down when the tanks are dry.' },
+   { k:'flightMode', t:'Flight path', min:0, max:2, step:1, v:0,
+     choices:['Level — gravity ignored','Vertical — straight up','Gravity turn'],
+     hint:'Vertical and gravity turn both add the weight term and track altitude, and the ' +
+          'atmosphere thins as you climb: pressure falls as exp(−h/H) with H = RT/g. So the ' +
+          'nozzle matched at the surface becomes under-expanded on the way up, and drag falls ' +
+          'away with the density. A gravity turn additionally lets weight bend the flight ' +
+          'path over, which is how a real launch reaches horizontal.' },
+   { k:'kickSpeed', t:'Pitch-over speed',  min:5, max:500, step:5, v:50, unit:'m/s',
+     hint:'Gravity turn only. A vehicle pointing exactly at the zenith never turns — the ' +
+          'weight vector is along its velocity and there is nothing to bend it — so a real ' +
+          'launch pitches over deliberately once it is clear of the pad. This is the airspeed ' +
+          'at which that happens.' },
+   { k:'kickAngle', t:'Pitch-over angle',  min:0.5, max:30, step:0.5, v:5, unit:'°',
+     hint:'How far from vertical the pitch-over throws the flight path. Gravity does the rest, ' +
+          'and does it faster the slower the vehicle is going: dγ/dt = −g·cos γ / v.' },
    { k:'dryMassLog',  t:'Dry mass',    min:-1, max:3, step:0.01, v:0.3, log:true, unit:'kg',
      hint:'Everything that is not propellant. Logarithmic, 0.1 kg to a tonne. Keep it ' +
           'consistent with the vehicle you have drawn: the default body is 56 mm across and ' +
@@ -243,12 +257,6 @@ const CONTROLS = [
    { k:'propMassLog', t:'Propellant mass', min:-1, max:3, step:0.01, v:0, log:true, unit:'kg',
      hint:'Burn time follows from this and the mass flow, which the solver already measures, ' +
           'so there is nothing to set for consumption rate.' },
-   { k:'flightMode', t:'Flight path', min:0, max:1, step:1, v:0,
-     choices:['Level — gravity ignored','Vertical — climbing against gravity'],
-     hint:'Vertical adds the weight term to the acceleration and tracks altitude, and the ' +
-          'atmosphere then thins out as you climb: pressure falls as exp(−h/H) with ' +
-          'H = RT/g. So the nozzle you matched at the surface becomes under-expanded on the ' +
-          'way up, and drag falls away with the density.' },
    { k:'ffLog',    t:'Trajectory fast-forward', min:0, max:6, step:0.05, v:1.3, log:true,
      unit:'×',
      hint:'1× is real time: one millisecond of flow is one millisecond of flight. But the ' +
@@ -321,7 +329,8 @@ const G0 = 9.80665;
    reproduces the published scale height of every world here to within a few percent —
    8.4 km for Earth, 10.8 for Mars, 15.9 for Venus, 21 for Titan. */
 const scaleHeight = () => Math.pow(10, P.RgasALog) * P.tAmb / Math.max(P.gSurf, 1e-9);
-const climbing = () => P.accelerate === 1 && P.flightMode === 1;
+const climbing = () => P.accelerate === 1 && P.flightMode >= 1;   // vertical or gravity turn
+const turning  = () => P.accelerate === 1 && P.flightMode === 2;
 function pAmbPa(){
   const p0 = Math.pow(10, P.pAmbLog) * 1000;      // the slider is the pressure the run starts at
   if (!climbing() || P.gSurf <= 0) return p0;
@@ -466,8 +475,9 @@ function derived(){
   const massNow = dryMass() + (P.accelerate ? S.propLeft : propMass());
   const Fmeas = m ? m.thrust : thrust, Dmeas = m ? m.drag : 0;
   const netF = Fmeas - Dmeas;
-  const gUse = climbing() ? P.gSurf : 0;
-  const accel = netF / Math.max(massNow, 1e-9) - gUse;    // weight included on a vertical climb
+  // only the component of weight along the flight path decelerates the vehicle
+  const gUse = climbing() ? P.gSurf * Math.sin(S.fpa) : 0;
+  const accel = netF / Math.max(massNow, 1e-9) - gUse;
   const twr = netF / Math.max(massNow * Math.max(P.gSurf, 1e-9), 1e-9);
   const ispUse = mdotUse > 0 ? Fmeas / (mdotUse * G0) : 0;
   // Tsiolkovsky on the measured exhaust velocity: propulsion only, no drag or gravity loss
@@ -478,7 +488,8 @@ function derived(){
            Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
            machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
            burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas,
-           twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog) };
+           twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog),
+           fpaDeg: S.fpa * 180 / Math.PI };
 }
 
 
@@ -545,7 +556,8 @@ const S = {
   series:[], peak:0, peakT:-1,
   spfAuto:32, wallSmooth:16, simRate:0, diverged:false,
   colourScale:1, meas:null,
-  flightT:0, vFlight:0, propLeft:0, shutT:-1, alt:0, apogee:false,   // trajectory state
+  flightT:0, vFlight:0, propLeft:0, shutT:-1,
+  alt:0, altMax:0, range:0, fpa:Math.PI/2, kicked:false, apogee:false, impact:false,
 };
 var FIXED_DT = null, EXPORTING = false;
 
@@ -564,7 +576,8 @@ function buildGrid(){
 function resetSim(){
   S.t = 0; S.dt = 0.001;
   S.flightT = 0; S.vFlight = P.vAmb; S.propLeft = propMass(); S.shutT = -1;
-  S.alt = 0; S.apogee = false;
+  S.alt = 0; S.altMax = 0; S.range = 0; S.fpa = Math.PI / 2; S.kicked = false;
+  S.apogee = false; S.impact = false;
   S.series.length = 0; S.peak = 0; S.peakT = -1; S.vmax = 1; S.meas = null;
   S.diverged = false;
   const d = document.getElementById('diverged');
@@ -704,16 +717,26 @@ function updateMetrics(){
     `axial momentum is entering the nozzle than leaving it. That is what an unfired or ` +
     `unchoked nozzle does in a freestream — it acts as an inlet, not a nozzle. Check the ` +
     `chamber pressure against the critical ratio above.`]);
-  if (climbing() && D.twr < 1) flags.push(['bad',
+  // only meaningful before it has left the ground and while the engine is still lit
+  if (climbing() && S.shutT < 0 && S.altMax <= 0 && D.twr < 1) flags.push(['bad',
     `<b>It will not lift off.</b> Thrust-to-weight is ${fmt(D.twr,2)}: the vehicle weighs ` +
     `${fmt(D.massNow * P.gSurf,0)} N and the net axial force is ${fmt(D.netF,0)} N. On a ` +
     `vertical path it simply sits there. Raise the chamber pressure or the throat radius, or ` +
     `drop some mass.`]);
   if (S.apogee) flags.push(['bad',
     `<b>Apogee — the climb has stopped.</b> Weight and drag have taken the airspeed to zero. ` +
-    `A real vehicle would now fall back, but the solver only knows how to fly nose-first into ` +
-    `the freestream, so the trajectory is held at zero rather than reversed. Everything after ` +
-    `this point is meaningless.`]);
+    `A real vehicle would fall back, but the solver only knows how to fly nose-first into the ` +
+    `freestream, so the trajectory is held at zero rather than reversed. Nothing past this ` +
+    `point means anything. A <b>gravity turn</b> does not have this problem: it arcs over and ` +
+    `stays nose-first the whole way.`]);
+  if (S.impact) flags.push(['bad',
+    `<b>Back on the ground.</b> The trajectory has come down again, ${fmt(S.range/1000,1)} km ` +
+    `downrange. Nothing past this point means anything.`]);
+  if (turning() && !S.kicked && S.flightT > 0) flags.push(['warn',
+    `Still going straight up: the pitch-over is set for ${fmt(P.kickSpeed,0)} m/s and the ` +
+    `vehicle is at ${fmt(D.vInf,0)} m/s. Until it happens a gravity turn and a vertical climb ` +
+    `are the same trajectory — with the flight path exactly at the zenith there is no sideways ` +
+    `component of weight to bend it.`]);
   flags.push(['warn',
     `<b>Drag is pressure drag only.</b> It is the (p − p_ambient) integral over the nose, the ` +
     `body and the base annulus, which at supersonic speed is the term that actually responds ` +
@@ -810,7 +833,9 @@ function updateMetrics(){
       ['pressure drag',  fmt(m.drag,1) + ' N'],
       ['net axial force',fmt(m.net,1) + ' N'],
     ]) + '<hr>' +
-    rows('Flight' + (P.accelerate ? (climbing() ? ' — vertical' : ' — level') : ' — not flying'), [
+    rows('Flight' + (!P.accelerate ? ' — not flying'
+                     : turning() ? ' — gravity turn'
+                     : climbing() ? ' — vertical' : ' — level'), [
       ['airspeed',      fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
       ['mass now',      fmt(D.massNow,2) + ' kg of ' + fmt(D.massFull,2)],
       ['propellant flow',fmt(D.mdotUse*1000,1) + ' g/s'],
@@ -826,6 +851,9 @@ function updateMetrics(){
     ] : []).concat(climbing() ? [
       ['altitude gained',fmt(S.alt/1000,2) + ' km'],
       ['ambient now',   fmt(100*D.pa/(Math.pow(10,P.pAmbLog)*1000),0) + '% of start'],
+    ] : []).concat(turning() ? [
+      ['flight-path angle', fmt(D.fpaDeg,1) + '° from horizontal'],
+      ['downrange',     fmt(S.range/1000,2) + ' km'],
     ] : [])) +
     rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
   markActiveQuality();
@@ -1875,13 +1903,35 @@ function advanceFlight(simmedMs){
   const dtF = simmedMs * 1e-3 * Math.pow(10, P.ffLog);   // ms of flow -> s of flight
   const mass = Math.max(dryMass() + S.propLeft, 1e-6);
   const g = climbing() ? P.gSurf : 0;
-  const v = S.vFlight + (m.net / mass - g) * dtF;
-  // Nose-first is the only attitude the solver can represent, so the climb stops at apogee
-  // rather than turning over and falling back tail-first. It has to have been climbing first:
-  // a vehicle still sitting on the pad is at zero for a quite different reason.
-  if (climbing() && S.vFlight > 1 && v <= 0) S.apogee = true;
+
+  /* Point mass over a flat planet, with the body axis along the velocity vector. That last
+     part is not a simplification bolted on: a gravity turn is by definition the trajectory
+     flown at zero angle of attack, which is exactly the case an axisymmetric solver with an
+     axial freestream can represent. Level and vertical are the two degenerate cases —
+     no gravity at all, and a flight path that starts at the zenith and has nothing to bend it,
+     since dfpa/dt goes as cos(fpa). */
+  if (turning() && !S.kicked && S.vFlight >= P.kickSpeed){
+    S.fpa = (90 - P.kickAngle) * Math.PI / 180;          // deliberate pitch-over off the pad
+    S.kicked = true;
+  }
+  const sinF = climbing() ? Math.sin(S.fpa) : 0;
+  const v = S.vFlight + (m.net / mass - g * sinF) * dtF;
+  // Straight up, the solver can only fly nose-first, so the climb stops at apogee rather than
+  // falling back tail-first. It has to have been climbing first: a vehicle still on the pad is
+  // at zero airspeed for a quite different reason.
+  if (climbing() && !turning() && S.vFlight > 1 && v <= 0) S.apogee = true;
   S.vFlight = Math.max(0, v);
-  if (climbing()) S.alt = Math.max(0, S.alt + S.vFlight * dtF);
+  if (turning() && S.vFlight > 1){
+    S.fpa -= (g * Math.cos(S.fpa) / S.vFlight) * dtF;
+    S.fpa = Math.max(-Math.PI / 2, S.fpa);
+  }
+  if (climbing()){
+    S.alt += S.vFlight * Math.sin(S.fpa) * dtF;
+    S.range += S.vFlight * Math.cos(S.fpa) * dtF;
+    S.altMax = Math.max(S.altMax, S.alt);
+    // it has to have got off the ground first: sitting on the pad is also altitude zero
+    if (S.altMax > 10 && S.alt <= 0){ S.alt = 0; S.impact = true; }
+  }
   if (S.propLeft > 0){
     S.propLeft = Math.max(0, S.propLeft - Math.max(m.mdot, 0) * dtF);
     if (S.propLeft <= 0 && S.shutT < 0) S.shutT = S.t;    // note the flow time of burnout
@@ -2530,7 +2580,8 @@ function drawOverlay(cx, w, h, headerH, simH, footerH, sc){
                     `    net ${fmt(mm.net,0)} N` : '') +
               (P.accelerate ? `    flight T+${fmt(S.flightT,2)} s    v ${fmt(Dv.vInf,0)} m/s` +
                               `    ${fmt(Dv.accel/G0,1)} g` +
-                              (climbing() ? `    +${fmt(S.alt/1000,2)} km` : '') : ''),
+                              (climbing() ? `    +${fmt(S.alt/1000,2)} km` : '') +
+                              (turning() ? `    path ${fmt(Dv.fpaDeg,0)}\u00b0` : '') : ''),
               pad, headerH * 0.32);
   cx.fillStyle = '#8b97a6';
   cx.font = `${Math.round(11 * sc)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
@@ -2860,6 +2911,8 @@ function syncSliders(){
     }
     s.inp.value = P[k];
     P[k] = parseFloat(s.inp.value);          // re-read so clamping to the control's range applies
+    if (s.it.choices)
+      for (const o of s.inp.options) o.toggleAttribute('selected', o.value === s.inp.value);
     if (s.out) s.out.textContent = fmtVal(s.it, P[k]);
   }
 }
@@ -2909,6 +2962,7 @@ const URLKEY = {
   gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',
   visc:'nu', smag:'cs', dyeDiss:'dd',
   accelerate:'ac', flightMode:'fm', dryMassLog:'dm', propMassLog:'pm', ffLog:'ff', gSurf:'gs',
+  kickSpeed:'ks', kickAngle:'ka',
   downrange:'dn', rDomain:'rd', zAspect:'za', res:'rs', cfl:'cf', budget:'bg', spf:'sp',
   probe:'pb',
   vidFlight:'vf', vidMsPerFrame:'vm', vidFps:'vr', vidWidth:'vw', vidMbps:'vb',
@@ -3120,6 +3174,7 @@ function frame(){
       ? `flight T+${S.flightT.toFixed(2)} s   = flow t \u00d7 ${D0.ff.toFixed(0)} fast-forward\n` +
         `   v ${D0.vInf.toFixed(0)} m/s   a ${(D0.accel/G0).toFixed(1)} g` +
         (climbing() ? `   alt +${(S.alt/1000).toFixed(2)} km` : '   level flight') +
+        (turning() ? `   path ${D0.fpaDeg.toFixed(0)}\u00b0   downrange ${(S.range/1000).toFixed(2)} km` : '') +
         `   prop ${(100*S.propLeft/Math.max(propMass(),1e-9)).toFixed(0)}%\n`
       : ``) +
     `${fps.toFixed(0)} fps   ${steps} steps/frame   ` +

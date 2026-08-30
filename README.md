@@ -52,7 +52,7 @@ prediction.
 | **Nozzle** | throat radius, exit radius, converging and diverging lengths, and a **conical or bell** divergent contour |
 | **Airframe** | nose cone shape and length, forebody length, wall thickness |
 | **Atmosphere** | six worlds as buttons, plus ambient pressure on a log slider from 10 Pa to 10 MPa, temperature, flight speed, surface gravity, γ and R directly |
-| **Vehicle & flight** | acceleration on/off, level or vertical flight, dry mass, propellant mass, trajectory fast-forward |
+| **Vehicle & flight** | acceleration on/off, level / vertical / gravity-turn flight, pitch-over speed and angle, dry mass, propellant mass, trajectory fast-forward |
 | **Fluid** | viscosity, Smagorinsky constant, tracer fade |
 | **Domain & solver** | plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
 | **Measurement** | where the measurement plane sits, from the exit plane downstream |
@@ -110,8 +110,8 @@ choices are not independent:
 - Fire the default engine into **Jupiter** and compare the plume with Earth at the same
   pressure. Only the ambient gas changed.
 - Move the measurement plane downstream and watch the thrust integral stop meaning thrust.
-- Tick **accelerate**, set **vertical**, raise the fast-forward, and watch drag climb as v²
-  until burnout — then watch the vehicle coast, thinning air lifting the thrust as it goes.
+- Tick **accelerate**, set a **gravity turn**, raise the fast-forward, and watch drag climb as
+  v² until burnout — then watch the vehicle coast, thinning air lifting the thrust as it goes.
 - Launch the same vehicle from **Mars** and from **Venus**: 0.016 kg/m³ against 65 kg/m³ of
   ambient, and 3.7 m/s² against 8.9 of gravity.
 
@@ -181,8 +181,8 @@ the net of the two. Thrust and drag also appear live in the readout over the flo
 header of exported video.
 
 **Flight** turns that force balance into trajectory numbers: airspeed, current mass, burn time,
-thrust-to-weight, acceleration, measured Isp and ideal Δv — plus altitude and how far the
-ambient pressure has fallen, once you are climbing.
+thrust-to-weight, acceleration, measured Isp and ideal Δv — plus altitude, flight-path angle,
+downrange and how far the ambient pressure has fallen, once you are climbing.
 
 Those two mass flows matter. `propellant flow` is weighted by the exhaust tracer and is the
 one to compare against the choked-throat figure; `all gas across` is everything crossing the
@@ -240,25 +240,23 @@ The second independent check is the velocity scaling. During an accelerating run
 10.8 N at 144 m/s → 113 N at 447 m/s: a speed ratio of 3.1 against a drag ratio of 10.5, where
 v² would predict 9.6.
 
-### Two clocks, and they are not the same
+### Three clocks
 
-This trips people up, so the readout now names both every time they appear.
+They are different quantities and the readout names each one wherever it appears.
 
-- **Flow time**, milliseconds. The CFD clock: how much gas dynamics has been simulated. It is
-  the `flow t` in the readout and the axis of the plot.
-- **Flight time**, seconds. The trajectory clock: how far into the burn the vehicle is.
+- **Flow time**, milliseconds — the CFD clock: how much gas dynamics has been simulated. This
+  is `flow t` in the readout and the axis of the plot.
+- **Flight time**, seconds — the trajectory clock: how far into the burn the vehicle is.
+- **Wall time** — real time, and it appears only as `ms of flow per wall second`.
 
-They tick at the same rate only at 1× fast-forward, and 1× is useless: the flow settles in
-about 2 ms while a burn lasts seconds, so at real time the trajectory would never visibly move.
-The readout therefore always prints the factor —
+Flow and flight tick together only at 1× fast-forward, and 1× is not useful: the flow settles
+in about 2 ms while a burn lasts seconds, so at real time the trajectory never visibly moves.
+The readout prints the factor between them:
 
 ```
 flow t = 1.537 ms
 flight T+4.78 s   = flow t × 3162 fast-forward
 ```
-
-— and a third clock, wall-clock time, appears only in the performance line, now labelled
-`ms of flow per wall second` so it cannot be confused with either.
 
 ### Flying a trajectory
 
@@ -272,8 +270,13 @@ shock. There is **no consumption-rate input** because there is nothing to input:
 so burn time follows. The Δv it reports is the propulsive figure only, with no gravity or drag
 losses subtracted.
 
-**Level** flight is the axial force balance alone. **Vertical** adds the weight term and tracks
-altitude, and the atmosphere then thins as you climb: pressure falls as exp(−h/H). So a nozzle
+Three flight paths:
+
+- **Level** — the axial force balance alone, gravity ignored.
+- **Vertical** — adds the weight term and tracks altitude.
+- **Gravity turn** — as vertical, but weight is also allowed to bend the flight path over.
+
+On both climbing paths the atmosphere thins as you go: pressure falls as exp(−h/H), so a nozzle
 matched at the surface becomes under-expanded on the way up while drag falls away with the
 density. Altitude is measured from wherever the run started.
 
@@ -287,24 +290,56 @@ A vertical launch from the Earth surface at 3162× fast-forward, 2 kg dry and 1 
 | T+11.3 s | 4.7 km | 348 m/s | 57 % | −2 N | 100 N | still coasting up |
 
 Thrust *rises* slightly on the way up as the back pressure falls, drag peaks and then collapses
-with the density, and after burnout the vehicle coasts and slows under drag and weight. Two
-things it will tell you about rather than fake: if thrust-to-weight is below 1 it says the
-vehicle will not lift off, and if the climb decelerates to zero it stops there and says so,
-because a nose-first solver cannot model falling back tail-first.
+with the density, and after burnout the vehicle coasts and slows under drag and weight.
 
-![Mid-burn on a vertical climb](docs/img/flight.png)
+![Mid-burn on a climb](docs/img/flight.png)
 
-**Gravity is constant with altitude and there is no flight-path angle.** Over the few
-kilometres a burn like this covers, the inverse-square correction is a fraction of a percent;
-a gravity turn is a different tool.
+### The gravity turn
 
-### Why thrust goes negative after burnout
+A vehicle pointing exactly at the zenith never turns: its weight is along its own velocity
+vector and there is nothing to bend it. So a real launch **pitches over** deliberately once it
+is clear of the pad, and from then on weight does the steering:
+
+```
+dv/dt   = (F − D)/m − g·sin γ
+dγ/dt   = −g·cos γ / v
+```
+
+with γ the flight-path angle from horizontal. Set the airspeed at which the pitch-over happens
+and how far it throws the flight path; everything after that follows.
+
+The same vehicle, kicked 25° at 50 m/s:
+
+| flight time | γ | altitude | downrange | airspeed | ambient |
+|---|---|---|---|---|---|
+| T+1.8 s | 63.7° | 0.05 km | 0.02 km | 129 m/s | 99 % |
+| T+4.7 s | 61.2° | 0.94 km | 0.49 km | 561 m/s | 89 % |
+| T+7.5 s | 60.0° | 2.59 km | 1.42 km | 602 m/s | 74 % |
+| T+13.2 s | 55.6° | 4.52 km | 2.61 km | 301 m/s | 59 % |
+
+Note how slowly it turns while the vehicle is fast — the turn rate goes as 1/v, so most of the
+bending happens late. That is not a quirk of the model; it is why real launches pitch over early
+and gently.
+
+The turn is also the one trajectory this solver can represent *exactly*. A gravity turn is by
+definition flown at zero angle of attack, with the body axis along the velocity vector — which
+is precisely the case an axisymmetric solver with an axial freestream describes. A vertical
+climb is fine too, until it runs out of speed: the solver only knows how to fly nose-first, so
+it stops at apogee and says so rather than pretending to fall back tail-first.
+
+Two other things it declines to fake: thrust-to-weight below 1 on the pad, and a turn that
+comes back down to the ground.
+
+**Gravity is constant with altitude.** Over the few kilometres a burn like this covers, the
+inverse-square correction is a fraction of a percent.
+
+### Thrust goes negative after burnout
 
 Because after burnout it is not thrust. The exit-plane integral ∫(ρu² + p − p_ambient) dA is
-only "thrust" while the engine is producing flow. With the chamber ramped down to ambient, the
+only thrust while the engine is producing flow. With the chamber ramped down to ambient, the
 nozzle is an open pipe with ambient gas being dragged through it, and the same integral reads a
-small *negative* number — a few newtons of internal drag on a dead engine. That is correct, and
-the panel now says so explicitly the moment burnout happens, as does the readout.
+small *negative* number — a few newtons of internal drag on a dead engine. The panel and the
+readout both say so the moment burnout happens.
 
 ### The honest problem with watching a burn
 
@@ -589,7 +624,7 @@ in bands above and below the image rather than on top of the flow.
 
 Every physical setting is serialised into the URL fragment, so a link reproduces a
 configuration exactly. Only non-defaults are written and the keys are two characters, so a
-typical link carries a handful; with all 43 parameters off their defaults it comes to 329
+typical link carries a handful; with all 45 parameters off their defaults it comes to 342
 characters.
 
 The fragment is used rather than the query string because it never reaches a server, and
@@ -599,7 +634,7 @@ because assigning `location.hash` works on `file://` URLs where Chrome throws on
 Links are validated on the way in — values clamped to their control's range, unknown keys and
 unparseable numbers ignored — so a hand-edited `#tr=99999&re=-50&ra=abc&nt=77` loads as a
 valid configuration rather than breaking. Round-tripping is tested: encoding a fully
-non-default configuration, resetting everything, then decoding restores all 43 settings with
+non-default configuration, resetting everything, then decoding restores all 45 settings with
 zero mismatches.
 
 Back and forward restore the configuration *and* restart the run — otherwise you would be
