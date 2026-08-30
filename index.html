@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rocket Sim — axisymmetric nozzle &amp; plume sandbox</title>
+<title>Rocket Sim: axisymmetric nozzle and plume sandbox</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b3440;
@@ -107,9 +107,10 @@
 </div>
 <div id="panel">
   <h1>Rocket Sim</h1>
-  <div class="sub">Axisymmetric (r–z) compressible Navier–Stokes. A hot-gas injector feeds a
-  combustion chamber and a parametric converging–diverging nozzle; the vehicle flies nose-first
-  into a freestream of your choosing. The view is a slice through the axis.</div>
+  <div class="sub">Axisymmetric (r-z) compressible Navier-Stokes, two species. A hot-gas
+  injector feeds a combustion chamber and a parametric converging-diverging nozzle. The vehicle
+  flies nose-first through a selectable atmosphere; exhaust and atmosphere are separate gases.
+  The view is a slice through the axis.</div>
   <div class="btnrow">
     <button id="fire" class="primary">Ignite ⏎</button>
     <button id="pause">Pause</button>
@@ -119,8 +120,8 @@
     <button id="share">Copy shareable link</button>
     <button id="defaults">Reset to defaults</button>
   </div>
-  <div class="hint" style="margin:-4px 0 8px">Every physical setting lives in the link —
-    <span id="urlLen">…</span>.</div>
+  <div class="hint" style="margin:-4px 0 8px">Every physical setting is encoded in the link.
+    Current length <span id="urlLen">…</span>.</div>
   <div id="diverged" class="flag bad" style="display:none"></div>
   <div id="controls"></div>
   <div id="note"></div>
@@ -130,7 +131,7 @@
 <script>
 "use strict";
 /* ==========================================================================
-   Rocket Sim — axisymmetric compressible flow around a rocket's aft end.
+   Rocket Sim: axisymmetric compressible flow around a rocket's aft end.
    --------------------------------------------------------------------------
    Coordinates: p = (z, r).  z runs nose-to-tail, r is radial, r >= 0.
    The vehicle sits nose-first in a freestream blowing in +z, so in this frame
@@ -138,8 +139,8 @@
    meets the exhaust plume at the base. Exhaust leaves the nozzle in +z.
 
    Units: millimetres, milliseconds, and SI for everything thermodynamic
-   (kelvin, pascal, kg/m^3). 1 mm/ms == 1 m/s, which is why the geometry can
-   be in millimetres and the velocities still read as metres per second.
+   (kelvin, pascal, kg/m^3). 1 mm/ms == 1 m/s, so geometry in millimetres and
+   velocities in metres per second are consistent.
    ========================================================================== */
 
 /* ========================== parameters ========================== */
@@ -147,154 +148,233 @@ const CONTROLS = [
  { group:'Chamber & injector', open:true, items:[
    { k:'pcBar',   t:'Chamber pressure',      min:1,   max:300, step:1,   v:20,   unit:'bar',
      hint:'Stagnation pressure held at the injector face. The nozzle chokes above the critical ' +
-          'ratio — 1.77× ambient at γ = 1.2, 1.89× at γ = 1.4, and the panel shows the live ' +
-          'figure. Everything downstream scales with the ratio, not with the value.' },
-   { k:'Tc',      t:'Chamber temperature',   min:300, max:4000,step:25,  v:3000, unit:'K',
-     hint:'Stagnation temperature of the injected gas. Sets the sound speed, and with it both ' +
-          'the exhaust velocity and the timestep.' },
+          'ratio (1.77× ambient at γ = 1.2, 1.89× at γ = 1.4); the panel shows the live value. ' +
+          'Downstream conditions depend on the ratio to ambient, not on the absolute value.' },
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
-     hint:'Chamber conditions ramp from ambient to full over this long, smoothstep in time. ' +
-          'A step change is legal but launches a much stronger starting shock.' },
+     hint:'Chamber conditions ramp from ambient to full over this interval, smoothstep in ' +
+          'time. Shorter ramps produce a stronger starting shock.' },
    { k:'chamR',   t:'Chamber radius',        min:5,   max:60,  step:0.5, v:25,   unit:'mm', rebuild:true },
    { k:'chamLen', t:'Chamber length',        min:10,  max:200, step:1,   v:50,   unit:'mm', rebuild:true,
-     hint:'Only the gas dynamics are modelled — no injector elements, no combustion, no ' +
-          'characteristic length. The head end is simply held at stagnation conditions.' },
+     hint:'Gas dynamics only. No injector elements, no combustion, no characteristic length; ' +
+          'the head end is held at stagnation conditions.' },
+ ]},
+ { group:'Propellant', open:true, items:[
+   { kind:'buttons', t:'Exhaust gas', opts:'PROPELLANTS',
+     hint:'Flame temperature and exhaust composition at roughly optimum mixture ratio and a ' +
+          'few tens of bar. These set the gas leaving the injector and its temperature. No ' +
+          'chemistry is modelled.' },
+   { k:'Tc',      t:'Chamber temperature',   min:100, max:4000,step:5,   v:3570, unit:'K', rebuild:true,
+     hint:'Stagnation temperature at the injector, set by the propellant buttons.' },
+   { k:'gammaE',  t:'Exhaust γ',             min:1.1, max:1.67,step:0.01,v:1.24, rebuild:true,
+     hint:'Ratio of specific heats of the combustion products. 1.2 to 1.25 for most ' +
+          'bipropellants.' },
+   { k:'RgasE',   t:'Exhaust R',             min:150, max:800, step:1,   v:375,  unit:'J/kg·K', rebuild:true,
+     hint:'8314 / molecular weight. Exhaust velocity scales with √(R·Tc), so low molecular ' +
+          'weight raises performance: hydrolox is 693 against kerolox at 375.' },
  ]},
  { group:'Nozzle', open:true, items:[
    { k:'throatR',  t:'Throat radius',        min:1,  max:40,  step:0.25, v:8,    unit:'mm', rebuild:true,
-     hint:'The single most important number here. Mass flow is proportional to throat area ' +
-          'once choked, and the grid needs ≳6 cells across the throat radius to mean anything.' },
-   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:15.25,unit:'mm', rebuild:true,
-     hint:'With the throat, this fixes the expansion ratio and therefore the design altitude.' },
+     hint:'Once choked, mass flow is proportional to throat area. The grid needs at least ' +
+          'about 6 cells across the throat radius; the panel reports the current figure.' },
+   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:14.75,unit:'mm', rebuild:true,
+     hint:'With the throat radius this fixes the expansion ratio, and so the ambient pressure ' +
+          'the nozzle is matched to.' },
    { k:'convLen',  t:'Converging length',    min:2,  max:120, step:1,    v:20,   unit:'mm', rebuild:true,
-     hint:'Contour is a raised cosine, so it meets both the chamber wall and the throat with ' +
-          'zero slope. Subsonic flow here is forgiving; the shape barely matters.' },
+     hint:'Raised-cosine contour, meeting both the chamber wall and the throat at zero slope. ' +
+          'The subsonic flow here is insensitive to the shape.' },
    { k:'divLen',   t:'Diverging length',     min:2,  max:250, step:1,    v:25,   unit:'mm', rebuild:true,
-     hint:'Sets the divergence half-angle, and with it the cosine loss and the risk of ' +
-          'separation. 12–18° is the usual conical range.' },
+     hint:'Sets the divergence half-angle, and with it the cosine loss and the separation ' +
+          'margin. 12 to 18° is the usual conical range.' },
    { k:'nozShape', t:'Divergent contour',    min:0,  max:1,   step:1,    v:1,    rebuild:true,
      choices:['Conical (straight)','Bell (parabolic)'],
-     hint:'Conical is a straight line from throat to exit. Bell turns the flow hard just past ' +
-          'the throat and axially at the exit, recovering most of the cosine loss in less length.' },
+     hint:'Conical is a straight line from throat to exit. A bell turns the flow sharply just ' +
+          'past the throat and back to axial at the exit, recovering most of the cosine loss ' +
+          'in less length.' },
  ]},
  { group:'Airframe', open:true, items:[
    { k:'noseType', t:'Nose cone',            min:0,  max:2,   step:1,    v:2,    rebuild:true,
      choices:['Flat (blunt cylinder)','Pointy (conical)','Rounded (ellipsoidal)'],
-     hint:'Only matters with a freestream. Flat gives a detached bow shock and a big subsonic ' +
-          'pocket; pointy gives an attached oblique shock above its own Mach angle; rounded ' +
-          'is the low-drag compromise that most real vehicles fly.' },
+     hint:'Affects the flow only when there is a freestream. Flat gives a detached bow shock ' +
+          'and a subsonic pocket; pointy gives an attached oblique shock above its Mach angle; ' +
+          'rounded is intermediate.' },
    { k:'noseLen',  t:'Nose cone length',     min:5,  max:300, step:1,    v:55,   unit:'mm', rebuild:true,
      hint:'Ignored when the nose is flat.' },
    { k:'foreLen',  t:'Forebody length',      min:0,  max:400, step:1,    v:40,   unit:'mm', rebuild:true,
-     hint:'Solid body between the nose base and the injector face — tankage, in a real vehicle.' },
+     hint:'Solid body between the nose base and the injector face.' },
    { k:'wallT',    t:'Wall thickness',       min:0.5,max:20,  step:0.5,  v:3,    unit:'mm', rebuild:true,
      hint:'Body radius is max(chamber, nozzle exit) + this, so the base is always an annulus.' },
  ]},
- { group:'Environment', open:true, items:[
-   { k:'pAmbLog',  t:'Ambient pressure',     min:-2, max:2.1, step:0.05, v:2,    log:true, unit:'kPa',
-     hint:'Logarithmic: 100 kPa is sea level, 26 kPa ≈ 10 km, 1 kPa ≈ 31 km, 0.01 kPa ≈ 65 km. ' +
-          'The nozzle is only right at one of these.' },
-   { k:'tAmb',     t:'Ambient temperature',  min:150,max:330, step:1,    v:288,  unit:'K',
-     hint:'Sets ambient density and sound speed, and therefore the freestream Mach number.' },
+ { group:'Atmosphere', open:true, items:[
+   { kind:'buttons', t:'Ambient gas', opts:'ATMOSPHERES',
+     hint:'Composition, surface pressure, surface temperature and surface gravity. The ' +
+          'exhaust is a separate gas, so the plume boundary carries a jump in molecular ' +
+          'weight as well as in temperature.' },
+   { k:'pAmbLog',  t:'Ambient pressure',     min:-2, max:4,   step:0.002, v:2.006, log:true, unit:'kPa',
+     hint:'Logarithmic, 10 Pa to 10 MPa. Mars surface 0.64 kPa, Earth 101, Titan 147, Venus ' +
+          'surface 9200.' },
+   { k:'tAmb',     t:'Ambient temperature',  min:60, max:800, step:1,    v:288,  unit:'K',
+     hint:'With the gas constant, fixes ambient density and sound speed.' },
    { k:'vAmb',     t:'Ambient air speed',    min:0,  max:1500,step:5,    v:0,    unit:'m/s',
-     hint:'Flight speed. In the vehicle frame this is air entering at the nose and washing ' +
-          'down the body into the base region, where it shears against the plume.' },
+     hint:'Flight speed. In the vehicle frame, atmosphere enters at the nose and flows down ' +
+          'the body into the base region. With acceleration on, this is the initial value ' +
+          'rather than a fixed one.' },
+   { k:'gammaA',   t:'Ambient γ',            min:1.1, max:1.7, step:0.01, v:1.4, rebuild:true,
+     hint:'1.40 for air and nitrogen, 1.29 for the CO₂ of Mars and Venus, about 1.43 for the ' +
+          'hydrogen/helium of Jupiter.' },
+   { k:'gSurf',    t:'Surface gravity',      min:0, max:30, step:0.01, v:9.81, unit:'m/s²',
+     hint:'Set by the atmosphere buttons. Used for the weight term on a climb, and with R and ' +
+          'T it fixes the scale height H = RT/g.' },
+   { k:'RgasALog', t:'Ambient R',            min:2, max:3.6, step:0.002, v:2.458, log:true,
+     unit:'J/kg·K', rebuild:true,
+     hint:'Logarithmic: the range spans 191 for CO₂, 287 for air and 3748 for Jupiter’s ' +
+          'hydrogen.' },
  ]},
- { group:'Gas', items:[
-   { k:'gamma',    t:'Ratio of specific heats γ', min:1.1, max:1.67, step:0.01, v:1.2,
-     hint:'ONE gas fills the whole domain, ambient and exhaust alike, so this is a choice ' +
-          'about which end to get right. The default 1.2 is rocket exhaust; air is 1.4. At 1.2 ' +
-          'the engine numbers are honest and the atmosphere is not — see below.' },
-   { k:'Rgas',     t:'Specific gas constant R', min:150, max:600, step:1, v:350, unit:'J/kg·K',
-     hint:'Default 350 is kerolox-like exhaust (hydrolox is nearer 690, off this slider); air ' +
-          'is 287. At 350 the modelled atmosphere is 18% less dense than real air at the same ' +
-          'pressure and temperature, which is the price of a correct plume.' },
+ { group:'Vehicle & flight', open:true, items:[
+   { k:'accelerate', t:'Accelerate from the initial airspeed', kind:'check', v:0,
+     hint:'Off: the airspeed slider is a fixed boundary condition. On: airspeed becomes a ' +
+          'state variable, integrated under thrust minus pressure drag. Propellant is consumed ' +
+          'at the measured mass flow and the chamber shuts down when it runs out.' },
+   { k:'flightMode', t:'Flight path', min:0, max:2, step:1, v:0,
+     choices:['Level (gravity ignored)','Vertical','Gravity turn'],
+     hint:'Vertical and gravity turn add the weight term and track altitude. Ambient pressure ' +
+          'then falls as exp(−h/H), so a nozzle matched at the surface becomes under-expanded ' +
+          'with altitude and drag falls with density. A gravity turn also lets weight rotate ' +
+          'the flight path.' },
+   { k:'kickSpeed', t:'Pitch-over speed',  min:5, max:500, step:5, v:50, unit:'m/s',
+     hint:'Gravity turn only. With the flight path exactly vertical, weight is parallel to the ' +
+          'velocity and dγ/dt is zero, so the turn has to be started by a deliberate ' +
+          'pitch-over. This is the airspeed at which it happens.' },
+   { k:'kickAngle', t:'Pitch-over angle',  min:0.5, max:30, step:0.5, v:5, unit:'°',
+     hint:'Angle from vertical applied at the pitch-over. Thereafter dγ/dt = −g·cos γ / v, so ' +
+          'the turn rate rises as the vehicle slows.' },
+   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:3, step:0.01, v:0.3, log:true, unit:'kg',
+     hint:'Logarithmic, 0.1 kg to 1 tonne. Should be consistent with the geometry: the default ' +
+          'body is 56 mm across and 250 mm long.' },
+   { k:'propMassLog', t:'Propellant mass', min:-1, max:3, step:0.01, v:0, log:true, unit:'kg',
+     hint:'Burn time is this divided by the measured mass flow. There is no consumption-rate ' +
+          'input because the mass flow is an output of the solver.' },
+   { k:'ffLog',    t:'Trajectory fast-forward', min:0, max:6, step:0.05, v:1.3, log:true,
+     unit:'×',
+     hint:'Ratio of flight time to flow time. At 1× they advance together. The flow settles ' +
+          'in about 2 ms and a burn lasts seconds, so higher values are needed to reach ' +
+          'trajectory timescales. Valid while the airspeed changes slowly relative to the ' +
+          'settling time; the panel checks this and flags it.' },
+ ]},
+ { group:'Fluid', items:[
    { k:'visc',     t:'Kinematic viscosity',  min:0, max:1, step:0.0001, v:0.0151, unit:'mm²/ms',
-     hint:'Air at 20 °C = 0.0151. Constant, not Sutherland — the boundary layers here are ' +
-          'unresolved anyway.' },
+     hint:'Air at 20 °C is 0.0151. Constant rather than Sutherland; the boundary layers are ' +
+          'unresolved at this cell size.' },
    { k:'smag',     t:'Turbulence model (Smagorinsky Cs)', min:0, max:0.45, step:0.005, v:0.17,
-     hint:'Stands in for the 3-D mixing that axial symmetry forbids. Without it the shear ' +
-          'layer between plume and freestream stays laminar and refuses to spread.' },
+     hint:'Sub-grid model standing in for the three-dimensional mixing excluded by axial ' +
+          'symmetry. At zero the plume/freestream shear layer stays laminar and does not ' +
+          'spread.' },
    { k:'dyeDiss',  t:'Exhaust tracer fade',  min:0, max:0.05, step:0.001, v:0, unit:'/ms' },
  ]},
  { group:'Domain & solver', items:[
    { k:'downrange', t:'Plume domain',        min:50, max:1500,step:10,   v:300,  unit:'mm', rebuild:true,
-     hint:'How far past the nozzle exit plane the domain runs.' },
+     hint:'Distance from the nozzle exit plane to the outflow boundary.' },
    { k:'rDomain',   t:'Radial domain',       min:1.5,max:6,   step:0.25, v:2.5,  rebuild:true,
      unit:'× body radius',
-     hint:'How far out the domain reaches. Wider is safer for a bow shock and for the plume ' +
-          'spreading, but the radial cell count is fixed, so wider also means coarser — and ' +
-          'the throat is what suffers first. Watch the throat resolution below.' },
+     hint:'Radial extent of the domain. The radial cell count is fixed, so a wider domain ' +
+          'means coarser cells and a less well resolved throat.' },
    { k:'zAspect',   t:'Axial cell stretch',  min:1,  max:4,   step:0.25, v:2,    rebuild:true,
-     hint:'Axial cell size as a multiple of radial. The plume is long and thin, and the ' +
-          'timestep is set by the axial wave speed, so stretching buys speed nearly free. ' +
-          'Drop to 1 when you care about shock-cell spacing.' },
+     hint:'Axial cell size as a multiple of radial. The timestep is set by the axial wave ' +
+          'speed, so stretching reduces cost. Use 1 when measuring shock-cell spacing.' },
    { k:'res',       t:'Radial cells',        min:48, max:352, step:16,   v:112,  rebuild:true,
-     hint:'Cost is roughly linear in this, not quadratic — the timestep shrinks with the cell ' +
-          'size, so a finer grid costs twice over. Check the throat resolution in the panel.' },
+     hint:'Cost is roughly linear in this: the timestep shrinks with cell size, so a finer ' +
+          'grid costs both more cells and more steps.' },
    { k:'cfl',       t:'CFL number',          min:0.1,max:0.6, step:0.02, v:0.4,
-     hint:'MUSCL + SSP-RK2 is stable to about 0.6 here and the slider stops there. Lower it ' +
-          'if a strong starting shock trips the positivity floors.' },
+     hint:'MUSCL with SSP-RK2 is stable to about 0.6. Reduce it if a strong starting shock ' +
+          'trips the positivity floors.' },
    { k:'budget',    t:'Frame budget',        min:8,  max:120, step:2,    v:30,   unit:'ms',
-     hint:'With auto-pacing on, steps per frame are tuned to hit this.' },
+     hint:'Target frame time for the auto-pacer.' },
    { k:'spf',       t:'Steps / frame (manual)', min:1, max:800, step:1,  v:120,
-     hint:'Only used when auto-pacing is off.' },
+     hint:'Used only when auto-pacing is off.' },
  ]},
  { group:'Video export', items:[
-   { k:'vidFlight',     t:'Flight time to record', min:0.1, max:100, step:0.1, v:6, unit:'ms' },
-   { k:'vidMsPerFrame', t:'Flight time per frame', min:0.002, max:1, step:0.002, v:0.02, unit:'ms',
-     hint:'Constant by construction: every frame advances exactly this much, subdivided into ' +
-          'as many equal sub-steps as stability needs. The adaptive timestep is switched off.' },
+   { k:'vidFlight',     t:'Flow time to record', min:0.1, max:100, step:0.1, v:6, unit:'ms' },
+   { k:'vidMsPerFrame', t:'Flow time per frame', min:0.002, max:1, step:0.002, v:0.02, unit:'ms',
+     hint:'Fixed for every frame, subdivided into as many equal sub-steps as stability ' +
+          'requires. The adaptive timestep is disabled during export.' },
    { k:'vidFps',        t:'Video frame rate',   min:12, max:60, step:1, v:30, unit:'fps' },
    { k:'vidWidth',      t:'Video width',        min:480, max:1920, step:80, v:1280, unit:'px' },
    { k:'vidMbps',       t:'Bitrate',            min:1, max:40, step:1, v:12, unit:'Mb/s' },
  ]},
  { group:'Measurement', items:[
    { k:'probe',    t:'Measurement plane, past the exit', min:0, max:1000, step:5, v:0, unit:'mm',
-     hint:'At 0 this is the nozzle exit plane, where the momentum-plus-pressure integral is ' +
-          'the thrust. Move it downstream to watch the plume instead.' },
+     hint:'At 0 the plane is the nozzle exit, where the momentum-plus-pressure integral gives ' +
+          'thrust. Further downstream the integral measures the plume instead.' },
  ]},
 ];
 
 const P = {};
-for (const g of CONTROLS) for (const it of g.items) P[it.k] = it.v;
+for (const g of CONTROLS) for (const it of g.items) if (it.k) P[it.k] = it.v;
 const DEFAULTS = Object.assign({}, P);
 const SPEC = {};
-for (const g of CONTROLS) for (const it of g.items) SPEC[it.k] = it;
+for (const g of CONTROLS) for (const it of g.items) if (it.k) SPEC[it.k] = it;
 const VIEW = { field:0, gain:1, showGeom:true };
 const OPT = { autoPace:true, format:'mp4' };
 
 const G0 = 9.80665;
 
 /* ========================== environment & chamber ========================== */
-const pAmbPa = () => Math.pow(10, P.pAmbLog) * 1000;
+/* Isothermal exponential atmosphere. The scale height is not a separate input: H = RT/g
+   falls out of the gas constant, the temperature and the gravity already set, and it
+   reproduces the published scale height of every world here to within a few percent:
+   8.4 km for Earth, 10.8 for Mars, 15.9 for Venus, 21 for Titan. */
+const scaleHeight = () => Math.pow(10, P.RgasALog) * P.tAmb / Math.max(P.gSurf, 1e-9);
+const climbing = () => P.accelerate === 1 && P.flightMode >= 1;   // vertical or gravity turn
+const turning  = () => P.accelerate === 1 && P.flightMode === 2;
+function pAmbPa(){
+  const p0 = Math.pow(10, P.pAmbLog) * 1000;      // the slider is the pressure the run starts at
+  if (!climbing() || P.gSurf <= 0) return p0;
+  return p0 * Math.exp(-S.alt / scaleHeight());
+}
+const R_UNIVERSAL = 8314.462618;                 // J/(kmol K), so R = R_u / M with M in g/mol
+const molarMass = R => R_UNIVERSAL / R;
 
+/* The atmosphere, which is a different gas from the exhaust. */
+const dryMass = () => Math.pow(10, P.dryMassLog);
+const propMass = () => Math.pow(10, P.propMassLog);
+const flightSpeed = () => P.accelerate ? S.vFlight : P.vAmb;
 function env(){
-  const g = P.gamma, Rg = P.Rgas, pa = pAmbPa(), Ta = P.tAmb;
+  const g = P.gammaA, Rg = Math.pow(10, P.RgasALog), pa = pAmbPa(), Ta = P.tAmb;
   const rhoA = pa / (Rg * Ta);
   const aA = Math.sqrt(g * Rg * Ta);
-  return { g, Rg, pa, Ta, rhoA, aA, vInf:P.vAmb, machInf:P.vAmb / aA };
+  const v = flightSpeed();
+  return { g, Rg, pa, Ta, rhoA, aA, vInf:v, machInf:v / aA };
 }
+/* The exhaust. Everything inside the nozzle is this gas. */
+const exhaust = () => ({ g:P.gammaE, Rg:P.RgasE, cv:P.RgasE / (P.gammaE - 1) });
 
 /* The chamber is a plenum held at stagnation conditions, ramped in over `riseMs` so the
    run does not begin with a discontinuity the size of the pressure ratio. */
+const smoothstep = x => { const c = Math.min(1, Math.max(0, x)); return c * c * (3 - 2 * c); };
 function chamberState(t){
-  const E = env();
-  const s = P.riseMs <= 0 ? 1 : Math.min(1, Math.max(0, t / P.riseMs));
-  const sm = s * s * (3 - 2 * s);
+  const E = env(), X = exhaust();
+  let sm = smoothstep(P.riseMs <= 0 ? 1 : t / P.riseMs);
+  // Tanks dry: ramp the chamber back down over the same time the ignition took, rather than
+  // cutting it, which would launch an expansion wave as violent as the starting shock.
+  if (S.shutT >= 0) sm = Math.min(sm, 1 - smoothstep((t - S.shutT) / Math.max(P.riseMs, 1e-6)));
   const p = E.pa + (P.pcBar * 1e5 - E.pa) * sm;
   const T = E.Ta + (P.Tc - E.Ta) * sm;
-  return { p, T, rho: p / (E.Rg * T) };
+  return { p, T, rho: p / (X.Rg * T) };            // the plenum holds exhaust, not atmosphere
 }
 
 /* ========================== geometry ==========================
    Everything the shaders need to draw and to classify a point, computed once per rebuild
    so the JS metrics and the GPU geometry cannot drift apart. */
 const GEO = {};
+/* The two radii the sliders cannot be allowed to contradict: a throat wider than the
+   chamber, or an exit narrower than the throat. Derived from P rather than from GEO so the
+   panel tracks a slider being dragged, before the grid has been rebuilt. */
+function nozzleRadii(){
+  const rt = Math.min(P.throatR, P.chamR - 0.5);
+  return { rt, re: Math.max(P.nozExitR, rt) };
+}
 function computeGeometry(){
   const noseLen  = (P.noseType === 0) ? 0 : P.noseLen;
-  const throatR  = Math.min(P.throatR, P.chamR - 0.5);
-  const nozExitR = Math.max(P.nozExitR, throatR);
+  const { rt: throatR, re: nozExitR } = nozzleRadii();
   const bodyR    = Math.max(P.chamR, nozExitR) + P.wallT;
   const vehLen   = noseLen + P.foreLen + P.chamLen + P.convLen + P.divLen;
 
@@ -334,8 +414,10 @@ const machFromPressureRatio = (p0OverP, g) =>
   Math.sqrt(Math.max(0, 2 / (g - 1) * (Math.pow(p0OverP, (g - 1) / g) - 1)));
 
 function derived(){
-  const E = env(), g = E.g, Rg = E.Rg;
-  const rt = GEO.throatR || P.throatR, re = GEO.nozExitR || P.nozExitR;
+  // The nozzle flows pure exhaust, so all of the 1-D theory uses the exhaust gas. The
+  // atmosphere enters only as the back pressure it has to expand against.
+  const E = env(), X = exhaust(), g = X.g, Rg = X.Rg;
+  const { rt, re } = nozzleRadii();
   const At = Math.PI * rt * rt, Ae = Math.PI * re * re;      // mm²
   const eps = Ae / At;
   const pc = P.pcBar * 1e5, Tc = P.Tc;
@@ -374,32 +456,90 @@ function derived(){
   const cp = g * Rg / (g - 1);
   const vMax = Math.sqrt(2 * cp * Tc);
 
+  // density of the exhaust at the exit plane, against the atmosphere it is pushing into
+  const rhoE = pe / (Rg * Te);
+
+  /* Trajectory numbers. Mass flow comes from the measured propellant flux when there is one,
+     because that is what actually empties the tanks; the ideal figure stands in before the
+     first readback. Nothing here needs a consumption-rate input. */
+  const m = S.meas;
+  const mdotUse = (m && m.mdot > 0) ? m.mdot : mdot;
+  const burnTime = mdotUse > 0 ? propMass() / mdotUse : Infinity;
+  const massFull = dryMass() + propMass();
+  const massNow = dryMass() + (P.accelerate ? S.propLeft : propMass());
+  const Fmeas = m ? m.thrust : thrust, Dmeas = m ? m.drag : 0;
+  const netF = Fmeas - Dmeas;
+  // only the component of weight along the flight path decelerates the vehicle
+  const gUse = climbing() ? P.gSurf * Math.sin(S.fpa) : 0;
+  const accel = netF / Math.max(massNow, 1e-9) - gUse;
+  const twr = netF / Math.max(massNow * Math.max(P.gSurf, 1e-9), 1e-9);
+  const ispUse = mdotUse > 0 ? Fmeas / (mdotUse * G0) : 0;
+  // Tsiolkovsky on the measured exhaust velocity: propulsion only, no drag or gravity loss
+  const deltaV = ispUse * G0 * Math.log(massFull / Math.max(dryMass(), 1e-9));
   return { g, Rg, rt, re, At, Ae, eps, pc, Tc, pa:E.pa, choked, critical,
            Me, pe, Te, ve, peRatio, mdot, thrust, cf, isp, cstar,
-           halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax,
-           machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA };
+           halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax, rhoE,
+           Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
+           machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
+           burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas,
+           twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog),
+           fpaDeg: S.fpa * 180 / Math.PI };
 }
 
 
+/* Exhaust compositions at roughly optimum mixture ratio and a few tens of bar. R is
+   8314.46 / M; the flame temperatures are the usual textbook figures. */
+const PROPELLANTS = [
+ { n:'Kerolox',    d:'RP-1/LOX · M 22.2 · 3570 K',  p:{ gammaE:1.24, RgasE:375, Tc:3570 } },
+ { n:'Hydrolox',   d:'LH2/LOX · M 12.0 · 3400 K',   p:{ gammaE:1.22, RgasE:693, Tc:3400 } },
+ { n:'Methalox',   d:'CH4/LOX · M 20.5 · 3540 K',   p:{ gammaE:1.20, RgasE:406, Tc:3540 } },
+ { n:'Hypergolic', d:'N2O4/MMH · M 21.5 · 3200 K',  p:{ gammaE:1.23, RgasE:387, Tc:3200 } },
+ { n:'Solid',      d:'APCP · M 27.0 · 3200 K',      p:{ gammaE:1.18, RgasE:308, Tc:3200 } },
+ { n:'Cold gas',   d:'N2, unheated · M 28.0 · 290 K',p:{ gammaE:1.40, RgasE:297, Tc:290 } },
+];
+/* Surface (or 1-bar-level) conditions. Composition-weighted M, and gamma for the mixture at
+   roughly that temperature. */
+const LOG10 = Math.log10;
+const ATMOSPHERES = [
+ { n:'Earth',   d:'N2/O2 · 101 kPa · 288 K · 9.81 m/s²',
+   p:{ gammaA:1.40, RgasALog:LOG10(287.0),  pAmbLog:LOG10(101.325), tAmb:288, gSurf:9.81 } },
+ { n:'Mars',    d:'96% CO2 · 0.64 kPa · 210 K · 3.72 m/s²',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.8),  pAmbLog:LOG10(0.636),   tAmb:210, gSurf:3.72 } },
+ { n:'Venus',   d:'96% CO2 · 9.2 MPa · 737 K · 8.87 m/s²',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.4),  pAmbLog:LOG10(9200),    tAmb:737, gSurf:8.87 } },
+ { n:'Jupiter', d:'H2/He · 1 bar level · 165 K · 24.8 m/s²',
+   p:{ gammaA:1.43, RgasALog:LOG10(3748),   pAmbLog:LOG10(100),     tAmb:165, gSurf:24.79 } },
+ { n:'Titan',   d:'95% N2 · 147 kPa · 94 K · 1.35 m/s²',
+   p:{ gammaA:1.40, RgasALog:LOG10(304.6),  pAmbLog:LOG10(146.7),   tAmb:94,  gSurf:1.35 } },
+ { n:'Vacuum',  d:'10 Pa, no gravity (the solver floor)',
+   p:{ pAmbLog:-2, gSurf:0 } },
+];
+
 const PRESETS = [
- { n:'Sea-level booster', d:'ε ≈ 3.6, matched to 100 kPa',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:15.25, divLen:25, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Vacuum upper stage', d:'ε ≈ 40 at 1 kPa — under-expanded, as real ones are',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:0, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Over-expanded', d:'the vacuum bell at sea level',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Under-expanded', d:'stubby nozzle, shock diamonds',
-   p:{ pcBar:60, Tc:3000, throatR:8, nozExitR:10, divLen:12, convLen:20, nozShape:0,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
+ { n:'Sea-level booster', d:'kerolox on Earth, ε 3.4, matched',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:14.75, convLen:20, divLen:25, nozShape:1, noseType:2 } },
+ { n:'Vacuum upper stage', d:'hydrolox, ε 40 at 1 kPa, Isp 440 s',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:2.458, pAmbLog:0, tAmb:250, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Over-expanded', d:'that vacuum bell at sea level',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Under-expanded', d:'stubby kerolox at 60 bar, shock diamonds',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:60, throatR:8, nozExitR:10, convLen:20, divLen:12, nozShape:0, noseType:2 } },
  { n:'Supersonic flight', d:'Mach 2 at 10 km, base flow',
-   p:{ pcBar:40, Tc:3000, throatR:8, nozExitR:24, divLen:55, convLen:20, nozShape:1,
-       pAmbLog:1.4, tAmb:223, vAmb:600, noseType:1, gamma:1.2, Rgas:350 } },
- { n:'Cold gas thruster', d:'nitrogen, no combustion — γ and R are air-like again',
-   p:{ pcBar:10, Tc:300, throatR:8, nozExitR:23, divLen:45, convLen:20, nozShape:1,
-       pAmbLog:1, vAmb:0, gamma:1.4, Rgas:297 } },
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:1.4, tAmb:223, vAmb:600,
+       pcBar:40, throatR:8, nozExitR:24, convLen:20, divLen:55, nozShape:1, noseType:1 } },
+ { n:'Mars ascent', d:'methalox into 0.64 kPa of CO₂',
+   p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.29, RgasALog:LOG10(191.8), pAmbLog:LOG10(0.636), tAmb:210, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Venus surface', d:'92 bar back pressure, ε 1.1',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.29, RgasALog:LOG10(191.4), pAmbLog:LOG10(9200), tAmb:737, vAmb:0,
+       pcBar:250, throatR:8, nozExitR:8.25, convLen:20, divLen:12, nozShape:1, noseType:2 } },
+ { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
+   p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
+       pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
 ];
 
 /* ========================== simulation state ========================== */
@@ -410,6 +550,8 @@ const S = {
   series:[], peak:0, peakT:-1,
   spfAuto:32, wallSmooth:16, simRate:0, diverged:false,
   colourScale:1, meas:null,
+  flightT:0, vFlight:0, propLeft:0, shutT:-1,
+  alt:0, altMax:0, range:0, fpa:Math.PI/2, kicked:false, apogee:false, impact:false,
 };
 var FIXED_DT = null, EXPORTING = false;
 
@@ -427,6 +569,9 @@ function buildGrid(){
 
 function resetSim(){
   S.t = 0; S.dt = 0.001;
+  S.flightT = 0; S.vFlight = P.vAmb; S.propLeft = propMass(); S.shutT = -1;
+  S.alt = 0; S.altMax = 0; S.range = 0; S.fpa = Math.PI / 2; S.kicked = false;
+  S.apogee = false; S.impact = false;
   S.series.length = 0; S.peak = 0; S.peakT = -1; S.vmax = 1; S.meas = null;
   S.diverged = false;
   const d = document.getElementById('diverged');
@@ -447,16 +592,22 @@ function probeIz(){
    integral of rho*u_z counts entrained ambient air, which in a separated nozzle can be
    larger than the propellant flow itself; weighting by the exhaust mass fraction Y is what
    compares against the choked-throat figure. The momentum-plus-pressure integral is over
-   the nozzle exit area only — further out the plane cuts freestream, whose momentum is not
+   the nozzle exit area only: further out, the plane cuts freestream, whose momentum is not
    thrust. */
 function consumeProbeArr(buf, t){
   const pa = pAmbPa(), rLim = GEO.nozExitR;
-  let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0;
+  let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0, Taxis = 0, Yaxis = 0;
+  // the axial pressure force on the external surface, summed over the stations the GPU wrote
+  let drag = 0;
+  for (let iz = 0; iz < S.Nz; iz++){
+    const f = buf[S.Nr * 8 + iz];
+    if (Number.isFinite(f)) drag += f;
+  }
   for (let ir = 0; ir < S.Nr; ir++){
     const uz = buf[ir*8], rho = buf[ir*8+1], pr = buf[ir*8+2],
-          M = buf[ir*8+3], Y = buf[ir*8+4];
+          M = buf[ir*8+3], Y = buf[ir*8+4], T = buf[ir*8+5];
     if (!Number.isFinite(uz) || !Number.isFinite(rho)) continue;
-    if (ir === 0) axis = uz;
+    if (ir === 0){ axis = uz; Taxis = T; Yaxis = Y; }
     if (Math.abs(uz) > Math.abs(mx)) mx = uz;
     if (M > machMax) machMax = M;
     const rc = (ir + 0.5) * S.dr;
@@ -466,7 +617,7 @@ function consumeProbeArr(buf, t){
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
   }
-  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax };
+  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag, net: thrust - drag };
   if (mx > S.peak){ S.peak = mx; S.peakT = t; }
   S.series.push([t, axis, mx]);
   if (S.series.length > 4000) S.series.splice(0, 2000);
@@ -494,69 +645,130 @@ const fmtP = pa => pa >= 1e5 ? (pa/1e5).toFixed(2) + ' bar'
                              : pa.toFixed(1) + ' Pa';
 
 function updateMetrics(){
-  const D = derived(), m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0 };
+  const D = derived(),
+        m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0, Taxis:0, Yaxis:0,
+                        drag:0, net:0 };
   const flags = [];
   const cellsAcrossThroat = D.rt / S.dr;
 
   if (!D.choked) flags.push(['bad',
-    `<b>The nozzle is not choked.</b> Chamber pressure is only ${fmt(D.pc/D.pa,2)}× ambient, ` +
-    `below the critical ratio of ${fmt(D.critical,2)} for γ = ${fmt(D.g,2)}. The throat stays ` +
-    `subsonic, mass flow still responds to ambient pressure, and the divergent section acts as ` +
-    `a diffuser rather than a nozzle. Raise the chamber pressure or drop the ambient.`]);
+    `<b>Nozzle not choked.</b> Chamber pressure is ${fmt(D.pc/D.pa,2)}× ambient, below the ` +
+    `critical ratio of ${fmt(D.critical,2)} for γ = ${fmt(D.g,2)}. The throat stays subsonic, ` +
+    `mass flow still responds to ambient pressure, and the divergent section acts as a ` +
+    `diffuser. Raise chamber pressure or lower ambient pressure.`]);
   else if (D.peRatio < 0.35) flags.push(['bad',
-    `<b>Badly over-expanded — expect separation inside the bell.</b> Exit pressure is ` +
-    `${fmt(D.peRatio,2)}× ambient; below about 0.35 (Summerfield) the boundary layer separates ` +
-    `and the shock system moves inside the nozzle, which is a real structural load and not just ` +
-    `a loss. The ideal thrust below assumes full flowing, so it is optimistic here. ` +
-    `Optimum exit radius at this ambient is ${fmt(D.reOpt,1)} mm (ε = ${fmt(D.epsOpt,1)}).`]);
+    `<b>Heavily over-expanded; separation expected.</b> Exit pressure is ${fmt(D.peRatio,2)}× ` +
+    `ambient. Below about 0.35 (Summerfield) the boundary layer separates and the shock system ` +
+    `moves inside the nozzle, which is a structural load as well as a loss. The ideal thrust ` +
+    `below assumes the nozzle flows full and is therefore optimistic. Optimum exit radius at ` +
+    `this ambient pressure is ${fmt(D.reOpt,1)} mm (ε = ${fmt(D.epsOpt,1)}).`]);
   else if (D.peRatio < 0.8) flags.push(['warn',
-    `Over-expanded: exit pressure ${fmt(D.peRatio,2)}× ambient. Attached but lossy — oblique ` +
-    `shocks stand at the lip. Optimum exit radius here is ${fmt(D.reOpt,1)} mm.`]);
+    `Over-expanded: exit pressure ${fmt(D.peRatio,2)}× ambient. Attached, with oblique shocks ` +
+    `at the lip. Optimum exit radius here is ${fmt(D.reOpt,1)} mm.`]);
   else if (D.peRatio > 2.5) flags.push(['warn',
-    `Strongly under-expanded: exit pressure ${fmt(D.peRatio,1)}× ambient. The plume goes on ` +
-    `expanding outside through a Prandtl–Meyer fan, then over-shoots into a Mach disc and a ` +
-    `train of shock diamonds. Watch the schlieren field. A longer bell (exit radius ` +
-    `${fmt(D.reOpt,1)} mm) would recover it` +
+    `Strongly under-expanded: exit pressure ${fmt(D.peRatio,1)}× ambient. The plume continues ` +
+    `to expand outside through a Prandtl–Meyer fan, overshoots, and recompresses into a Mach ` +
+    `disc and a shock-cell train, visible in the schlieren field. Optimum exit radius is ` +
+    `${fmt(D.reOpt,1)} mm` +
     (D.pa < 5000
-      ? `, but the optimum expansion ratio grows without bound as ambient pressure falls, so ` +
-        `every real vacuum nozzle is under-expanded and truncated to save mass. This is normal.`
+      ? `. Note that the optimum expansion ratio grows without bound as ambient pressure ` +
+        `falls, so vacuum nozzles are always under-expanded and truncated for mass.`
       : `.`)]);
   else if (D.peRatio > 1.25) flags.push(['warn',
     `Mildly under-expanded: exit pressure ${fmt(D.peRatio,2)}× ambient.`]);
   else flags.push(['good',
-    `Near-optimally expanded: exit pressure ${fmt(D.peRatio,2)}× ambient. This nozzle is ` +
-    `matched to this altitude.`]);
+    `Near-optimally expanded: exit pressure ${fmt(D.peRatio,2)}× ambient.`]);
 
   if (cellsAcrossThroat < 6) flags.push(['bad',
-    `<b>The throat is ${fmt(cellsAcrossThroat,1)} cells across the radius.</b> Below about 6 the ` +
-    `sonic line is not resolved and the mass flow is a grid artefact. Raise the radial cell ` +
-    `count or the throat radius.`]);
+    `<b>Throat resolved by ${fmt(cellsAcrossThroat,1)} cells across the radius.</b> Below ` +
+    `about 6 the sonic line is not resolved and the mass flow is grid-dependent. Raise the ` +
+    `radial cell count, raise the throat radius, or narrow the radial domain.`]);
   else if (cellsAcrossThroat < 10) flags.push(['warn',
-    `Throat is ${fmt(cellsAcrossThroat,1)} cells across the radius — thin. Numbers will shift ` +
-    `noticeably with resolution.`]);
+    `Throat resolved by ${fmt(cellsAcrossThroat,1)} cells across the radius. Results will ` +
+    `shift with resolution.`]);
 
   if (P.nozShape === 0 && D.halfAngle > 22) flags.push(['warn',
-    `Conical half-angle is ${fmt(D.halfAngle,1)}°, costing ${fmt((1-D.lambda)*100,1)}% of the ` +
-    `momentum to divergence alone, and steep enough that the flow may not follow the wall.`]);
+    `Conical half-angle ${fmt(D.halfAngle,1)}°, a divergence loss of ` +
+    `${fmt((1-D.lambda)*100,1)}% of axial momentum. At this angle the flow may also fail to ` +
+    `follow the wall.`]);
 
   if (D.machInf > 0.8) flags.push(['warn',
-    `Freestream is Mach ${fmt(D.machInf,2)}. The base region is now a genuine interaction: the ` +
-    `external flow separates off the base annulus, the plume acts as an aerodynamic body, and ` +
-    `base pressure — not modelled by any of the 1-D numbers above — moves the real thrust.`]);
+    `Freestream at Mach ${fmt(D.machInf,2)}. The base region is an interaction between the ` +
+    `external flow separating off the base annulus and the plume. Base pressure is not ` +
+    `included in any of the 1-D figures above.`]);
   if (D.machInf > 1 && P.noseType === 0) flags.push(['warn',
-    `A flat nose at Mach ${fmt(D.machInf,2)} gives a detached bow shock and a subsonic pocket ` +
-    `that costs a lot of drag. It is the cheapest way to see a bow shock, and the worst way to fly.`]);
+    `Flat nose at Mach ${fmt(D.machInf,2)}: detached bow shock with a subsonic pocket behind ` +
+    `it, and high pressure drag.`]);
+
+  if (S.shutT >= 0) flags.push(['warn',
+    `<b>Burnout at ${fmt(S.shutT,2)} ms of flow time.</b> The chamber has been ramped back to ` +
+    `ambient. The exit-plane integral is no longer thrust: with no flow of its own the nozzle ` +
+    `is an open duct with ambient gas passing through it, and the integral reads a small ` +
+    `negative value, of order a few newtons. That is internal drag on a shut-down engine. The ` +
+    `vehicle is coasting.`]);
+  else if (m.thrust < 0) flags.push(['warn',
+    `<b>Negative exit-plane integral.</b> More axial momentum enters the nozzle than leaves ` +
+    `it, which is the behaviour of an unfired or unchoked nozzle in a freestream. Check the ` +
+    `chamber pressure against the critical ratio above.`]);
+
+  if (climbing() && S.shutT < 0 && S.altMax <= 0 && D.twr < 1) flags.push(['bad',
+    `<b>Thrust-to-weight ${fmt(D.twr,2)}: no lift-off.</b> Weight is ` +
+    `${fmt(D.massNow * P.gSurf,0)} N against a net axial force of ${fmt(D.netF,0)} N. Raise ` +
+    `chamber pressure or throat radius, or reduce mass.`]);
+  if (S.apogee) flags.push(['bad',
+    `<b>Apogee: airspeed has reached zero.</b> A real vehicle would fall back. The solver ` +
+    `only represents nose-first flight into the freestream, so the trajectory is held at zero ` +
+    `rather than reversed, and results past this point are invalid. A gravity turn stays ` +
+    `nose-first throughout and does not hit this limit.`]);
+  if (S.impact) flags.push(['bad',
+    `<b>Ground level reached, ${fmt(S.range/1000,1)} km downrange.</b> Results past this ` +
+    `point are invalid.`]);
+  if (turning() && !S.kicked && S.flightT > 0) flags.push(['warn',
+    `Pitch-over is set for ${fmt(P.kickSpeed,0)} m/s; current airspeed is ` +
+    `${fmt(D.vInf,0)} m/s. Until then the trajectory is vertical, because with the flight ` +
+    `path at the zenith weight has no component normal to the velocity.`]);
 
   flags.push(['warn',
-    `<b>One gas, everywhere.</b> γ = ${fmt(D.g,2)} and R = ${fmt(D.Rg,0)} J/kg·K apply to the ` +
-    `exhaust and to the ambient alike — there is no mixture model and no combustion. Real ` +
-    `exhaust has γ ≈ 1.2 and R ≈ 350, which changes the expansion; setting those here makes ` +
-    `the plume right and the atmosphere wrong. Pick whichever end you are studying.`]);
+    `<b>Drag is pressure drag.</b> It is the (p − p_ambient) integral over the nose, body and ` +
+    `base annulus, which is the term that responds to nose shape at supersonic speed. Skin ` +
+    `friction is excluded: the boundary layer is unresolved at this cell size, so a wall-shear ` +
+    `figure would depend on the grid rather than the flow. Total drag on a slender body is ` +
+    `typically about a third higher.`]);
+
+  if (P.accelerate){
+    /* Quasi-steady check. The flow needs roughly 2 ms to settle; if the boundary conditions
+       move appreciably in that window, thrust and drag are being read off a flow field that is
+       chasing a target it never reaches. Velocity and ambient pressure both count. */
+    const settleS = 2.0e-3 * D.ff;
+    const dv = Math.abs(D.accel) * settleS;
+    const fV = dv / Math.max(D.vInf, D.aAmb);
+    const fP = climbing() ? (D.vInf * settleS) / Math.max(D.H, 1e-9) : 0;
+    const frac = Math.max(fV, fP);
+    if (frac > 0.05) flags.push(['bad',
+      `<b>Quasi-steady assumption violated.</b> At ${fmt(D.ff,0)}× fast-forward, ` +
+      `${fmt(settleS,2)} s of flight elapse in the 2 ms the flow needs to settle. In that ` +
+      `window the airspeed changes by ${fmt(dv,0)} m/s` +
+      (fP > fV ? ` and ambient pressure by ${fmt(fP*100,0)}%` : '') +
+      `, or ${fmt(frac*100,0)}% of the scale the flow responds to. Thrust and drag are being ` +
+      `read from a flow field that has not converged to the current conditions. Reduce ` +
+      `<b>trajectory fast-forward</b>.`]);
+  }
+
   flags.push(['warn',
-    `The numbers above the line are 1-D isentropic theory and are exact for what they assume ` +
-    `(no separation, no boundary layer, uniform exit). The measured block below comes from the ` +
-    `grid and is not converged: treat it as ranking designs and as structure — where the shocks ` +
-    `stand, whether the flow separates — not as absolute figures.`]);
+    `<b>Two gases, both calorically perfect.</b> Exhaust is γ ${fmt(D.g,2)}, M ` +
+    `${fmt(D.Me_M,1)} g/mol; atmosphere is γ ${fmt(D.ambG,2)}, M ${fmt(D.amb_M,1)} g/mol; they ` +
+    `mix by mass fraction. Specific heats are constant, so there is no dissociation in the ` +
+    `chamber and no recombination during expansion. These are frozen-flow figures; real ` +
+    `nozzles fall between the frozen and equilibrium limits.`]);
+  if (D.pa > 2e6) flags.push(['warn',
+    `At ${fmtP(D.pa)} the ideal gas law is an approximation. For CO₂ well above its critical ` +
+    `temperature, as on Venus, the modelled ambient density of ${fmt(D.rhoAmb,1)} kg/m³ is ` +
+    `within a few percent of measurement.`]);
+  flags.push(['warn',
+    `The figures above the line are 1-D isentropic theory, exact under their assumptions of no ` +
+    `separation, no boundary layer and a uniform exit. The measured block is grid-dependent ` +
+    `and should be used for ranking designs and for structure (shock positions, whether the ` +
+    `flow separates) rather than as absolute values.`]);
 
   const rows = (title, list) => `<h4>${title}</h4>` + list.map(
     ([k,v]) => `<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
@@ -565,7 +777,7 @@ function updateMetrics(){
 
   DOM.metrics.innerHTML =
     critical.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('') +
-    rows('Nozzle — 1-D ideal', [
+    rows('Nozzle, 1-D ideal', [
       ['expansion ratio ε', fmt(D.eps,2) + ' : 1'],
       ['throat / exit R',   fmt(D.rt,2) + ' / ' + fmt(D.re,2) + ' mm'],
       ['half-angle',        fmt(D.halfAngle,1) + '°' + (P.nozShape === 0 ? ` (λ ${fmt(D.lambda,3)})` : ' at exit')],
@@ -582,11 +794,20 @@ function updateMetrics(){
       ['Isp (vac-corrected)', fmt(D.isp,0) + ' s' + (P.nozShape === 0 ? ` → ${fmt(D.isp*D.lambda,0)} s` : '')],
       ['optimum ε here',    fmt(D.epsOpt,2) + ' : 1'],
     ]) + '<hr>' +
-    rows('Environment', [
+    rows('Gases', [
+      ['exhaust γ / M',   fmt(D.g,2) + ' / ' + fmt(D.Me_M,1) + ' g/mol'],
+      ['exhaust R',       fmt(D.Rg,0) + ' J/kg·K'],
+      ['ambient γ / M',   fmt(D.ambG,2) + ' / ' + fmt(D.amb_M,1) + ' g/mol'],
+      ['ambient R',       fmt(D.ambR,0) + ' J/kg·K'],
+      ['exit ρ / ambient ρ', fmt(D.rhoE / D.rhoAmb, 3)],
+    ]) + '<hr>' +
+    rows('Atmosphere', [
       ['ambient pressure', fmtP(D.pa)],
       ['ambient density',  fmt(D.rhoAmb,4) + ' kg/m³'],
       ['sound speed',      fmt(D.aAmb,0) + ' m/s'],
-      ['freestream',       fmt(P.vAmb,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
+      ['surface gravity',  fmt(P.gSurf,2) + ' m/s²'],
+      ['scale height',     P.gSurf > 0 ? fmt(D.H/1000,1) + ' km' : '— (no gravity)'],
+      ['freestream',       fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
     ]) + '<hr>' +
     rows(`Measured at ${P.probe > 0 ? fmt(P.probe,0) + ' mm past the exit' : 'the exit plane'}`, [
       ['on-axis u_z',   fmt(m.axis,0) + ' m/s'],
@@ -594,14 +815,41 @@ function updateMetrics(){
       ['peak u_z ever', fmt(S.peak,0) + ' m/s' + (S.peak > 1 ? ` @ ${fmt(S.peakT,2)} ms` : '')],
       ['max Mach here', fmt(m.machMax,2)],
       ['max Mach field',fmt(CP.machMax,2)],
+      ['on-axis T',     fmt(m.Taxis,0) + ' K'],
+      ['on-axis exhaust',fmt(m.Yaxis*100,0) + '%'],
       ['propellant flow', fmt(m.mdot*1000,1) + ' g/s' +
                         (D.mdot > 0 ? ` (${fmt(100*m.mdot/D.mdot,0)}% of ideal)` : '')],
       ['all gas across',fmt(m.mdotAll*1000,1) + ' g/s'],
-      ['momentum + Δp',  fmt(m.thrust,1) + ' N' +
+      ['thrust',        fmt(m.thrust,1) + ' N' +
                         (D.thrust > 0 ? ` (${fmt(100*m.thrust/D.thrust,0)}% of ideal)` : '')],
-    ]) +
+      ['pressure drag',  fmt(m.drag,1) + ' N'],
+      ['net axial force',fmt(m.net,1) + ' N'],
+    ]) + '<hr>' +
+    rows('Flight' + (!P.accelerate ? ', not flying'
+                     : turning() ? ', gravity turn'
+                     : climbing() ? ', vertical' : ', level'), [
+      ['airspeed',      fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
+      ['mass now',      fmt(D.massNow,2) + ' kg of ' + fmt(D.massFull,2)],
+      ['propellant flow',fmt(D.mdotUse*1000,1) + ' g/s'],
+      ['burn time',     Number.isFinite(D.burnTime) ? fmt(D.burnTime,2) + ' s' : '—'],
+      ['thrust / weight',fmt(D.twr,2)],
+      ['acceleration',  fmt(D.accel,1) + ' m/s² (' + fmt(D.accel/G0,2) + ' g)' +
+                        (D.gUse > 0 ? ' after weight' : '')],
+      ['Isp, measured', fmt(D.mdotUse > 0 ? D.Fmeas/(D.mdotUse*G0) : 0,0) + ' s'],
+      ['Δv, ideal',     fmt(D.deltaV,0) + ' m/s'],
+    ] .concat(P.accelerate ? [
+      ['flight time T+', fmt(S.flightT,2) + ' s  (' + fmt(D.ff,0) + '× flow)'],
+      ['propellant left',fmt(100*S.propLeft/Math.max(propMass(),1e-9),0) + '%'],
+    ] : []).concat(climbing() ? [
+      ['altitude gained',fmt(S.alt/1000,2) + ' km'],
+      ['ambient now',   fmt(100*D.pa/(Math.pow(10,P.pAmbLog)*1000),0) + '% of start'],
+    ] : []).concat(turning() ? [
+      ['flight-path angle', fmt(D.fpaDeg,1) + '° from horizontal'],
+      ['downrange',     fmt(S.range/1000,2) + ' km'],
+    ] : [])) +
     rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
   markActiveQuality();
+  markActiveChoices();
 }
 
 /* One definition of the colour scale, shared by the shader, the on-screen legend and the
@@ -629,11 +877,9 @@ const activeColourScale = () => (EXPORTING && EXP.scale) ? EXP.scale : colourSca
 /* ==========================================================================
    WebGPU device, the shared uniform block, and the max-reduction.
 
-   There is one solver here and it is a compute solver, so WebGPU is required
-   rather than preferred. The original Airzooka carried a WebGL2 fragment-shader
-   fallback for its incompressible solver; a density-based scheme with an HLLC
-   Riemann solver has no cheap fragment-shader form, and keeping a second solver
-   that answers a different question was worse than requiring a modern browser.
+   The solver is a compute solver, so WebGPU is required rather than preferred:
+   a density-based scheme with an HLLC Riemann solver has no cheap
+   fragment-shader form.
    ========================================================================== */
 
 const WG = { ok:false, dev:null, ctx:null, fmt:null, canvas:null };
@@ -662,15 +908,16 @@ struct Params {
   vehD  : vec4<f32>,          // injectorDepth, p_chamber, rho_chamber, _
   flu   : vec4<f32>,          // visc, _, tracerFade, smagorinsky
   misc  : vec4<f32>,          // emptyDomain, probeIz, _, _
-  gas   : vec4<f32>,          // gamma, R, Prandtl, rk stage weight
+  gas   : vec4<f32>,          // gamma_exhaust, gamma_ambient, Prandtl, rk stage weight
   gas2  : vec4<f32>,          // a_ref, spongeZ, spongeR, _
+  gasB  : vec4<f32>,          // cv_exhaust, R_exhaust, cv_ambient, R_ambient
 };
 @group(0) @binding(0) var<uniform> P : Params;
 `;
 
 const PARAM_STRIDE = 256;                 // uniform dynamic-offset alignment
 const PARAM_FLOATS = PARAM_STRIDE / 4;
-const PARAM_BYTES  = 176;                 // the part of a slot the struct actually covers
+const PARAM_BYTES  = 192;                 // the part of a slot the struct actually covers
 
 const WGSL_REDUCE = `
 struct RP { n : u32, first : u32, _a : u32, _b : u32 };
@@ -710,7 +957,7 @@ async function wgpuInit(){
   let ad, dev;
   try {
     ad = await navigator.gpu.requestAdapter({ powerPreference:'high-performance' });
-    if (!ad) fatal('WebGPU is present but no adapter was returned — no GPU this process may use.');
+    if (!ad) fatal('WebGPU is present but returned no adapter: no GPU is available to this process.');
     const want = Math.min(10, ad.limits.maxStorageBuffersPerShaderStage || 8);
     dev = await ad.requestDevice({ requiredLimits:{ maxStorageBuffersPerShaderStage: want } });
   } catch (e){
@@ -777,7 +1024,7 @@ function wgpuFail(msg){
    `simT` is the simulated time this stage sits at, which is what the chamber ramp needs;
    the interactive loop plans a whole frame's worth of stages before submitting any of them,
    so it cannot read the ramp off S.t. */
-const CTEST = { emptyDomain:false };
+const CTEST = { emptyDomain:false, noSponge:false };
 function packParams(slot, dt, weight, simT){
   const F = WG.paramF, I = WG.paramI, o = slot * PARAM_FLOATS;
   const E = env(), C = chamberState(simT);
@@ -797,16 +1044,22 @@ function packParams(slot, dt, weight, simT){
   F[o+32] = CTEST.emptyDomain ? 1 : 0;
   F[o+33] = probeIz().iz; F[o+34] = 0;     F[o+35] = 0;
 
-  F[o+36] = P.gamma;  F[o+37] = P.Rgas;    F[o+38] = 0.72;      F[o+39] = weight;
-  const aRef = Math.max(E.aA, Math.sqrt(P.gamma * P.Rgas * P.Tc));
-  F[o+40] = aRef;     F[o+41] = 0.08 * S.Lz; F[o+42] = 0.12 * S.Rmax; F[o+43] = 0;
+  F[o+36] = P.gammaE; F[o+37] = E.g;       F[o+38] = 0.72;      F[o+39] = weight;
+  const aRef = Math.max(E.aA, Math.sqrt(P.gammaE * P.RgasE * P.Tc));
+  F[o+40] = aRef;
+  F[o+41] = CTEST.noSponge ? 0 : 0.08 * S.Lz;
+  F[o+42] = CTEST.noSponge ? 0 : 0.12 * S.Rmax;
+  F[o+43] = 0;
+  // mixture rule inputs: specific heat at constant volume and gas constant, per species
+  F[o+44] = P.RgasE / (P.gammaE - 1);          F[o+45] = P.RgasE;
+  F[o+46] = E.Rg / (E.g - 1);                  F[o+47] = E.Rg;
 }
 </script>
 
 <script>
 "use strict";
 /* ==========================================================================
-   Compressible solver — axisymmetric Navier–Stokes, density-based.
+   Compressible solver: axisymmetric Navier-Stokes, density-based.
 
    Conserved state U = (rho, rho*u_z, rho*u_r, E) as cell averages on a finite
    volume grid. Fluxes from an HLLC approximate Riemann solver with MUSCL
@@ -839,10 +1092,24 @@ const WALL   : i32 = 1;
 const PLENUM : i32 = 2;
 const PI : f32 = 3.14159265359;
 
-fn GAM() -> f32 { return P.gas.x; }
-fn RGAS() -> f32 { return P.gas.y; }
-/* Positivity floors relative to the ambient state rather than absolute: an absolute 1 Pa
-   floor is invisible at sea level and silently clamps the flow at 65 km. */
+/* ---- two-species thermodynamics ----------------------------------------------
+   Y is the exhaust mass fraction, carried as rho*Y and active rather than passive:
+   it sets the local equation of state. For a mixture of two calorically perfect
+   gases at a common temperature the specific heats add by mass fraction, which is
+   exact, and everything else follows:
+
+     cv = Y*cv_e + (1-Y)*cv_a        R = Y*R_e + (1-Y)*R_a
+     gamma = (cv + R) / cv           p = rho * R * T = (gamma - 1) * rho * e
+
+   The plume and the atmosphere are therefore separate gases, with a molecular-weight
+   jump across the contact surface between them. */
+fn cvMix(Y : f32) -> f32 { return mix(P.gasB.z, P.gasB.x, clamp(Y, 0.0, 1.0)); }
+fn rMix(Y : f32)  -> f32 { return mix(P.gasB.w, P.gasB.y, clamp(Y, 0.0, 1.0)); }
+fn gamMix(Y : f32) -> f32 { let cv = cvMix(Y); return (cv + rMix(Y)) / cv; }
+fn cpMix(Y : f32) -> f32 { return cvMix(Y) + rMix(Y); }
+
+/* Positivity floors relative to the ambient state rather than absolute: an absolute
+   1 Pa floor is invisible on Venus and clamps the flow to nothing on Mars. */
 fn RHO_FLOOR() -> f32 { return 1.0e-7 * P.env.z; }
 fn P_FLOOR() -> f32 { return 1.0e-7 * P.env.y; }
 
@@ -854,6 +1121,17 @@ fn outerR(z : f32) -> f32 {
   let s = clamp((z - zN) / max(zS - zN, 1e-6), 0.0, 1.0);
   if (P.vehB.w < 1.5) { return bR * s; }                        // conical
   return bR * sqrt(max(s * (2.0 - s), 0.0));                    // ellipsoidal
+}
+
+/* The external wetted surface, as a radius that is defined everywhere: zero ahead of the
+   nose, the vehicle's outer profile along it, and the nozzle exit radius aft of the base,
+   where the surface has ended and what remains is the opening. Written
+   this way, the projected-area difference across an axial slab telescopes correctly and a
+   uniform ambient pressure integrates to exactly zero net force. */
+fn extR(z : f32) -> f32 {
+  if (z < P.vehA.x) { return 0.0; }
+  if (z > P.vehB.y) { return P.vehC.z; }
+  return max(outerR(z), 0.0);
 }
 
 /* Internal cavity radius at z: chamber, raised-cosine contraction, then the divergent
@@ -888,29 +1166,34 @@ fn solidCell(iz : i32, ir : i32) -> i32 {
 }
 fn blocked(iz : i32, ir : i32) -> bool { return solidCell(iz, ir) == WALL; }
 
-fn toPrim(u : vec4<f32>) -> vec4<f32> {          // -> (rho, uz, ur, p)
+/* Primitive state travels with its own mass fraction, because the mixture rule needs it
+   to say what the pressure is; a face flux carries the species flux for the same reason. */
+struct Prim { w : vec4<f32>, Y : f32 };      // w = (rho, u_normal, u_tangential, p)
+struct Flux { f : vec4<f32>, y : f32 };      // f = (rho, rho*u_n, rho*u_t, E), y = rho*u*Y
+
+fn toPrim(u : vec4<f32>, d : f32) -> Prim {
   let rho = max(u.x, RHO_FLOOR());
   let uz = u.y / rho; let ur = u.z / rho;
-  let p = max((GAM() - 1.0) * (u.w - 0.5 * rho * (uz * uz + ur * ur)), P_FLOOR());
-  return vec4<f32>(rho, uz, ur, p);
+  let Y = clamp(d / rho, 0.0, 1.0);
+  let p = max((gamMix(Y) - 1.0) * (u.w - 0.5 * rho * (uz * uz + ur * ur)), P_FLOOR());
+  return Prim(vec4<f32>(rho, uz, ur, p), Y);
 }
-fn toCons(w : vec4<f32>) -> vec4<f32> {
+fn toCons(w : vec4<f32>, Y : f32) -> vec4<f32> {
   return vec4<f32>(w.x, w.x * w.y, w.x * w.z,
-                   w.w / (GAM() - 1.0) + 0.5 * w.x * (w.y * w.y + w.z * w.z));
+                   w.w / (gamMix(Y) - 1.0) + 0.5 * w.x * (w.y * w.y + w.z * w.z));
 }
-/* Freestream, in each face's own frame: normal component second, tangential third. */
+/* Freestream: pure ambient gas, Y = 0, moving axially at the flight speed. */
 fn ambZ() -> vec4<f32> { return vec4<f32>(P.env.z, P.env.w, 0.0, P.env.y); }
-fn ambR() -> vec4<f32> { return vec4<f32>(P.env.z, 0.0, P.env.w, P.env.y); }
-fn ambCons() -> vec4<f32> { return toCons(ambZ()); }
+fn ambCons() -> vec4<f32> { return toCons(ambZ(), 0.0); }
 `;
 
 const WGSL_COMP = WGSL_GEOM + `
 @group(1) @binding(0) var<storage, read>       Ua : array<vec4<f32>>;   // U^n
 @group(1) @binding(1) var<storage, read_write> Ub : array<vec4<f32>>;   // stage target
-@group(1) @binding(2) var<storage, read>       Da : array<f32>;         // rho*Y, exhaust tracer
+@group(1) @binding(2) var<storage, read>       Da : array<f32>;         // rho*Y
 @group(1) @binding(3) var<storage, read_write> Db : array<f32>;
-@group(1) @binding(4) var<storage, read_write> Fz : array<vec4<f32>>;
-@group(1) @binding(5) var<storage, read_write> Fr : array<vec4<f32>>;
+@group(1) @binding(4) var<storage, read_write> Fz : array<Flux>;
+@group(1) @binding(5) var<storage, read_write> Fr : array<Flux>;
 @group(1) @binding(6) var<storage, read_write> wav : array<vec2<f32>>;
 @group(1) @binding(7) var<storage, read_write> probeB : array<f32>;
 @group(1) @binding(8) var<storage, read>       Uold : array<vec4<f32>>; // U^n for RK stage 2
@@ -922,7 +1205,13 @@ fn cIdx(iz : i32, ir : i32) -> u32 {
   return u32(r * P.cells.x + z);
 }
 fn Uat(iz : i32, ir : i32) -> vec4<f32> { return Ua[cIdx(iz, ir)]; }
-fn Wat(iz : i32, ir : i32) -> vec4<f32> { return toPrim(Uat(iz, ir)); }
+fn Wat(iz : i32, ir : i32) -> Prim { let k = cIdx(iz, ir); return toPrim(Ua[k], Da[k]); }
+fn Yat(iz : i32, ir : i32) -> f32 {
+  let k = cIdx(iz, ir);
+  return clamp(Da[k] / max(Ua[k].x, RHO_FLOOR()), 0.0, 1.0);
+}
+/* The tangential/normal swap for radial faces, applied to a whole primitive state. */
+fn swapNT(a : Prim) -> Prim { return Prim(a.w.xzyw, a.Y); }
 
 fn minmod(a : f32, b : f32) -> f32 {
   if (a * b <= 0.0) { return 0.0; }
@@ -932,22 +1221,39 @@ fn minmod(a : f32, b : f32) -> f32 {
 fn mm4(a : vec4<f32>, b : vec4<f32>) -> vec4<f32> {
   return vec4<f32>(minmod(a.x, b.x), minmod(a.y, b.y), minmod(a.z, b.z), minmod(a.w, b.w));
 }
+/* MUSCL with a minmod limiter, on the mass fraction as well as on (rho, u, p): the mixture
+   rule needs Y at the face, and taking it from the cell centre instead would make the
+   species and the mass fluxes inconsistent at second order. */
+fn reconL(m2 : Prim, m1 : Prim, c0 : Prim) -> Prim {
+  return Prim(m1.w + 0.5 * mm4(m1.w - m2.w, c0.w - m1.w),
+              m1.Y + 0.5 * minmod(m1.Y - m2.Y, c0.Y - m1.Y));
+}
+fn reconR(m1 : Prim, c0 : Prim, p1 : Prim) -> Prim {
+  return Prim(c0.w - 0.5 * mm4(c0.w - m1.w, p1.w - c0.w),
+              c0.Y - 0.5 * minmod(c0.Y - m1.Y, p1.Y - c0.Y));
+}
 
-/* HLLC, in a frame where .y is the wall-normal velocity and .z the tangential one. */
-fn hllc(wL : vec4<f32>, wR : vec4<f32>) -> vec4<f32> {
-  let g = GAM();
-  let rL = wL.x; let unL = wL.y; let utL = wL.z; let pL = wL.w;
-  let rR = wR.x; let unR = wR.y; let utR = wR.z; let pR = wR.w;
-  let aL = sqrt(g * pL / rL); let aR = sqrt(g * pR / rR);
-  let EL = pL / (g - 1.0) + 0.5 * rL * (unL * unL + utL * utL);
-  let ER = pR / (g - 1.0) + 0.5 * rR * (unR * unR + utR * utR);
+/* HLLC in a frame where .y is the wall-normal velocity and .z the tangential one. Each
+   side carries its own gamma, so a contact surface between two different gases is a jump
+   in the equation of state as well as in density. The species flux is the mass flux times
+   the mass fraction on whichever side the contact wave came from, which is what keeps the
+   two consistent. */
+fn hllc(L : Prim, R : Prim) -> Flux {
+  let gL = gamMix(L.Y); let gR = gamMix(R.Y);
+  let rL = L.w.x; let unL = L.w.y; let utL = L.w.z; let pL = L.w.w;
+  let rR = R.w.x; let unR = R.w.y; let utR = R.w.z; let pR = R.w.w;
+  let aL = sqrt(gL * pL / rL); let aR = sqrt(gR * pR / rR);
+  let EL = pL / (gL - 1.0) + 0.5 * rL * (unL * unL + utL * utL);
+  let ER = pR / (gR - 1.0) + 0.5 * rR * (unR * unR + utR * utR);
   let SL = min(unL - aL, unR - aR);
   let SR = max(unL + aL, unR + aR);
   if (SL >= 0.0) {
-    return vec4<f32>(rL * unL, rL * unL * unL + pL, rL * unL * utL, (EL + pL) * unL);
+    let f = vec4<f32>(rL * unL, rL * unL * unL + pL, rL * unL * utL, (EL + pL) * unL);
+    return Flux(f, f.x * L.Y);
   }
   if (SR <= 0.0) {
-    return vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
+    let f = vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
+    return Flux(f, f.x * R.Y);
   }
   let den = rL * (SL - unL) - rR * (SR - unR);
   var Ss = 0.0;
@@ -959,35 +1265,40 @@ fn hllc(wL : vec4<f32>, wR : vec4<f32>) -> vec4<f32> {
     let f = rL * (SL - unL) / (SL - Ss);
     let Us = vec4<f32>(f, f * Ss, f * utL,
               f * (EL / rL + (Ss - unL) * (Ss + pL / (rL * (SL - unL)))));
-    return FL + SL * (Us - vec4<f32>(rL, rL * unL, rL * utL, EL));
+    let F = FL + SL * (Us - vec4<f32>(rL, rL * unL, rL * utL, EL));
+    return Flux(F, F.x * L.Y);
   }
   let FR = vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
   let f = rR * (SR - unR) / (SR - Ss);
   let Us = vec4<f32>(f, f * Ss, f * utR,
             f * (ER / rR + (Ss - unR) * (Ss + pR / (rR * (SR - unR)))));
-  return FR + SR * (Us - vec4<f32>(rR, rR * unR, rR * utR, ER));
+  let F = FR + SR * (Us - vec4<f32>(rR, rR * unR, rR * utR, ER));
+  return Flux(F, F.x * R.Y);
 }
 
-/* Thornber's low-Mach reconstruction fix. Plain upwinding has dissipation that grows like
-   1/M; the external flow over the body runs two orders of magnitude slower than the plume
-   and would otherwise be dissipated away. */
-fn lowMach(wL : ptr<function, vec4<f32>>, wR : ptr<function, vec4<f32>>) {
-  let g = GAM();
-  let aL = sqrt(g * (*wL).w / (*wL).x);
-  let aR = sqrt(g * (*wR).w / (*wR).x);
-  let ML = length(vec2<f32>((*wL).y, (*wL).z)) / aL;
-  let MR = length(vec2<f32>((*wR).y, (*wR).z)) / aR;
+/* Thornber's low-Mach reconstruction fix. Upwind dissipation grows like 1/M, and this
+   problem has external flow at Mach 0.2 beside a plume at Mach 4 on the same grid. */
+fn lowMach(L : ptr<function, Prim>, R : ptr<function, Prim>) {
+  let aL = sqrt(gamMix((*L).Y) * (*L).w.w / (*L).w.x);
+  let aR = sqrt(gamMix((*R).Y) * (*R).w.w / (*R).w.x);
+  let ML = length(vec2<f32>((*L).w.y, (*L).w.z)) / aL;
+  let MR = length(vec2<f32>((*R).w.y, (*R).w.z)) / aR;
   let zf = min(1.0, max(ML, MR));
-  let un = 0.5 * ((*wL).y + (*wR).y); let dn = 0.5 * ((*wL).y - (*wR).y) * zf;
-  let ut = 0.5 * ((*wL).z + (*wR).z); let dt2 = 0.5 * ((*wL).z - (*wR).z) * zf;
-  (*wL).y = un + dn; (*wR).y = un - dn;
-  (*wL).z = ut + dt2; (*wR).z = ut - dt2;
+  let un = 0.5 * ((*L).w.y + (*R).w.y); let dn = 0.5 * ((*L).w.y - (*R).w.y) * zf;
+  let ut = 0.5 * ((*L).w.z + (*R).w.z); let dt2 = 0.5 * ((*L).w.z - (*R).w.z) * zf;
+  (*L).w.y = un + dn; (*R).w.y = un - dn;
+  (*L).w.z = ut + dt2; (*R).w.z = ut - dt2;
 }
 
-/* A wall is handled by reflecting the fluid state through it and letting the Riemann solver
-   produce the flux. Every surface here is static, so the reflection is about zero. */
-fn reflectN(w : vec4<f32>) -> vec4<f32> {
-  return vec4<f32>(w.x, -w.y, w.z, w.w);
+/* A wall is handled by reflecting the fluid state through it and letting the Riemann
+   solver produce the flux. Every surface here is static, so the reflection is about zero,
+   and the mass fraction reflects unchanged. */
+fn reflectN(a : Prim) -> Prim {
+  return Prim(vec4<f32>(a.w.x, -a.w.y, a.w.z, a.w.w), a.Y);
+}
+fn floorPrim(a : Prim) -> Prim {
+  return Prim(vec4<f32>(max(a.w.x, RHO_FLOOR()), a.w.y, a.w.z, max(a.w.w, P_FLOOR())),
+              clamp(a.Y, 0.0, 1.0));
 }
 
 /* ---- axial faces: iz in [0, Nz], ir in [0, Nr) ---- */
@@ -997,11 +1308,11 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
   if (iz > P.cells.x || ir >= P.cells.y) { return; }
   let fi = u32(ir * (P.cells.x + 1) + iz);
 
-  var bL = blocked(max(iz - 1, 0), ir);
-  var bR = blocked(min(iz, P.cells.x - 1), ir);
-  if (bL && bR) { Fz[fi] = vec4<f32>(0.0); return; }
+  let bL = blocked(max(iz - 1, 0), ir);
+  let bR = blocked(min(iz, P.cells.x - 1), ir);
+  if (bL && bR) { Fz[fi] = Flux(vec4<f32>(0.0), 0.0); return; }
 
-  var wL : vec4<f32>; var wR : vec4<f32>;
+  var wL : Prim; var wR : Prim;
   if (bL) {                                            // wall on the left
     wR = Wat(iz, ir);
     wL = reflectN(wR);
@@ -1010,7 +1321,7 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
     wR = reflectN(wL);
   } else if (iz == 0) {                                // inlet: the freestream, imposed
     wR = Wat(0, ir);
-    wL = ambZ();
+    wL = Prim(ambZ(), 0.0);
   } else if (iz == P.cells.x) {                        // outlet: zero gradient
     wL = Wat(P.cells.x - 1, ir);
     wR = wL;
@@ -1019,13 +1330,11 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
     var wm2 = Wat(iz - 2, ir); var wp1 = Wat(iz + 1, ir);
     if (iz - 2 < 0 || blocked(iz - 2, ir)) { wm2 = wm1; }
     if (iz + 1 >= P.cells.x || blocked(iz + 1, ir)) { wp1 = w0; }
-    wL = wm1 + 0.5 * mm4(wm1 - wm2, w0 - wm1);
-    wR = w0  - 0.5 * mm4(w0 - wm1, wp1 - w0);
+    wL = reconL(wm2, wm1, w0);
+    wR = reconR(wm1, w0, wp1);
     lowMach(&wL, &wR);
   }
-  wL.x = max(wL.x, RHO_FLOOR()); wR.x = max(wR.x, RHO_FLOOR());
-  wL.w = max(wL.w, P_FLOOR());   wR.w = max(wR.w, P_FLOOR());
-  Fz[fi] = hllc(wL, wR);
+  Fz[fi] = hllc(floorPrim(wL), floorPrim(wR));
 }
 
 /* ---- radial faces: iz in [0, Nz), ir in [0, Nr] ---- */
@@ -1034,45 +1343,45 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x); let ir = i32(g.y);
   if (iz >= P.cells.x || ir > P.cells.y) { return; }
   let fi = u32(ir * P.cells.x + iz);
-  if (ir == 0) { Fr[fi] = vec4<f32>(0.0); return; }     // axis: face area is zero
+  if (ir == 0) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }   // axis: face area is zero
 
   let bL = blocked(iz, max(ir - 1, 0));
   let bR = blocked(iz, min(ir, P.cells.y - 1));
-  if (bL && bR) { Fr[fi] = vec4<f32>(0.0); return; }
+  if (bL && bR) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }
 
-  var wL : vec4<f32>; var wR : vec4<f32>;
+  var wL : Prim; var wR : Prim;
   if (bL) {
-    wR = Wat(iz, ir).xzyw;                             // (rho, ur, uz, p): normal first
+    wR = swapNT(Wat(iz, ir));                          // (rho, ur, uz, p): normal first
     wL = reflectN(wR);
   } else if (bR) {
-    wL = Wat(iz, ir - 1).xzyw;
+    wL = swapNT(Wat(iz, ir - 1));
     wR = reflectN(wL);
   } else if (ir == P.cells.y) {                        // far field: zero radial gradient
-    let w = Wat(iz, P.cells.y - 1).xzyw;
-    wL = w; wR = w;
+    wL = swapNT(Wat(iz, P.cells.y - 1));
+    wR = wL;
   } else {
-    let wm1 = Wat(iz, ir - 1).xzyw; let w0 = Wat(iz, ir).xzyw;
-    var wm2 = Wat(iz, ir - 2).xzyw; var wp1 = Wat(iz, ir + 1).xzyw;
+    let wm1 = swapNT(Wat(iz, ir - 1)); let w0 = swapNT(Wat(iz, ir));
+    var wm2 = swapNT(Wat(iz, ir - 2)); var wp1 = swapNT(Wat(iz, ir + 1));
     if (ir - 2 < 0 || blocked(iz, ir - 2)) { wm2 = wm1; }
     if (ir + 1 >= P.cells.y || blocked(iz, ir + 1)) { wp1 = w0; }
-    wL = wm1 + 0.5 * mm4(wm1 - wm2, w0 - wm1);
-    wR = w0  - 0.5 * mm4(w0 - wm1, wp1 - w0);
+    wL = reconL(wm2, wm1, w0);
+    wR = reconR(wm1, w0, wp1);
     lowMach(&wL, &wR);
   }
-  wL.x = max(wL.x, RHO_FLOOR()); wR.x = max(wR.x, RHO_FLOOR());
-  wL.w = max(wL.w, P_FLOOR());   wR.w = max(wR.w, P_FLOOR());
-  Fr[fi] = hllc(wL, wR).xzyw;                          // back to (rho, rho*uz, rho*ur, E)
+  let F = hllc(floorPrim(wL), floorPrim(wR));
+  Fr[fi] = Flux(F.f.xzyw, F.y);                        // back to (rho, rho*uz, rho*ur, E)
 }
 
-/* ---- viscous stress and conduction, central differences at cell centres ---- */
-fn muEff(iz : i32, ir : i32, rho : f32) -> f32 {
+/* ---- viscous stress and conduction, central differences at cell centres ----
+   The caller has already loaded the four neighbours, so they are passed in rather than
+   fetched again: every primitive costs two buffer loads now that the mass fraction has to
+   come with it, and this kernel is memory bound. */
+fn muEff(ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
+         wn : vec4<f32>, ws : vec4<f32>) -> f32 {
   var nu = P.flu.x;
   if (P.flu.w > 0.0) {                                  // Smagorinsky sub-grid
     let dz = P.d.x; let dr = P.d.y;
     let rc = (f32(ir) + 0.5) * dr;
-    let wp = Wat(iz + 1, ir); let wm = Wat(iz - 1, ir);
-    let wn = Wat(iz, ir + 1); let ws = Wat(iz, ir - 1);
-    let w0 = Wat(iz, ir);
     let duzdz = (wp.y - wm.y) / (2.0 * dz);
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
@@ -1083,7 +1392,7 @@ fn muEff(iz : i32, ir : i32, rho : f32) -> f32 {
     let dd = sqrt(dz * dr);
     nu = nu + P.flu.w * P.flu.w * dd * dd * sqrt(max(s2, 0.0));
   }
-  return rho * nu;
+  return w0.x * nu;
 }
 
 @compute @workgroup_size(8, 8)
@@ -1099,26 +1408,26 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
      kernels treat it as ordinary fluid, so the nozzle sees a reservoir and chokes on its
      own rather than being told what mass flow to pass. */
   if (s == PLENUM) {
-    Ub[k] = toCons(vec4<f32>(P.vehD.z, 0.0, 0.0, P.vehD.y));
+    Ub[k] = toCons(vec4<f32>(P.vehD.z, 0.0, 0.0, P.vehD.y), 1.0);
     Db[k] = P.vehD.z;
     return;
   }
   if (s == WALL) {
-    // Keep wall cells holding a plausible state: MUSCL reconstruction near a corner can
-    // still reach one, and stale garbage there shows up as a spike at the lip.
-    var acc = vec2<f32>(0.0); var n = 0.0;
+    // Wall cells hold the neighbour average so that MUSCL reaching a corner, and species
+    // diffusion across the wall face, both see a zero-gradient condition rather than a sink.
+    var acc = vec3<f32>(0.0); var n = 0.0;
     for (var q = 0; q < 4; q++) {
       var jz = iz; var jr = ir;
       if (q == 0) { jz = iz - 1; } else if (q == 1) { jz = iz + 1; }
       else if (q == 2) { jr = ir - 1; } else { jr = ir + 1; }
       if (jz >= 0 && jz < P.cells.x && jr >= 0 && jr < P.cells.y && !blocked(jz, jr)) {
-        let w = Wat(jz, jr); acc = acc + vec2<f32>(w.x, w.w); n = n + 1.0;
+        let a = Wat(jz, jr); acc = acc + vec3<f32>(a.w.x, a.w.w, a.Y); n = n + 1.0;
       }
     }
-    var rho = P.env.z; var pr = P.env.y;
-    if (n > 0.0) { rho = acc.x / n; pr = acc.y / n; }
-    Ub[k] = toCons(vec4<f32>(rho, 0.0, 0.0, pr));
-    Db[k] = 0.0;
+    var rho = P.env.z; var pr = P.env.y; var Yw = 0.0;
+    if (n > 0.0) { rho = acc.x / n; pr = acc.y / n; Yw = acc.z / n; }
+    Ub[k] = toCons(vec4<f32>(rho, 0.0, 0.0, pr), Yw);
+    Db[k] = rho * Yw;
     return;
   }
 
@@ -1128,15 +1437,20 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
   let frR = Fr[u32((ir + 1) * P.cells.x + iz)];
   let rL = f32(ir) * dr; let rR = f32(ir + 1) * dr;
 
-  let w0 = Wat(iz, ir);
-  var L = -(fzR - fzL) / dz - (rR * frR - rL * frL) / (rc * dr);
+  let a0 = Wat(iz, ir);
+  let w0 = a0.w; let Y0 = a0.Y;
+  var L = -(fzR.f - fzL.f) / dz - (rR * frR.f - rL * frL.f) / (rc * dr);
   L.z = L.z + w0.w / rc;                                // axisymmetric pressure source
+
+  // species, from the same Riemann solve as the mass flux
+  var Ld = -(fzR.y - fzL.y) / dz - (rR * frR.y - rL * frL.y) / (rc * dr);
 
   // ---- viscous terms ----
   if (P.flu.x > 0.0 || P.flu.w > 0.0) {
-    let mu = muEff(iz, ir, w0.x);
-    let wp = Wat(iz + 1, ir); let wm = Wat(iz - 1, ir);
-    let wn = Wat(iz, ir + 1); let ws = Wat(iz, ir - 1);
+    let ap = Wat(iz + 1, ir); let am = Wat(iz - 1, ir);
+    let aup = Wat(iz, ir + 1); let adn = Wat(iz, ir - 1);
+    let wp = ap.w; let wm = am.w; let wn = aup.w; let ws = adn.w;
+    let mu = muEff(ir, w0, wp, wm, wn, ws);
     let dz2 = dz * dz; let dr2 = dr * dr;
     let lapz = (wp.y - 2.0 * w0.y + wm.y) / dz2
              + ((rR * (wn.y - w0.y) - rL * (w0.y - ws.y)) / (rc * dr2));
@@ -1145,7 +1459,7 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
              - w0.z / (rc * rc);
     L.y = L.y + mu * lapz;
     L.z = L.z + mu * lapr;
-    // viscous heating plus conduction (Pr constant, cp = gamma R / (gamma - 1))
+    // viscous heating plus conduction, each cell using its own mixture cp and R
     let duzdz = (wp.y - wm.y) / (2.0 * dz);
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
@@ -1153,32 +1467,24 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
     let divu = duzdz + durdr + w0.z / rc;
     let phi = mu * (2.0 * (duzdz * duzdz + durdr * durdr + (w0.z / rc) * (w0.z / rc))
                     + (duzdr + durdz) * (duzdr + durdz) - (2.0 / 3.0) * divu * divu);
-    let Rg = RGAS();
-    let cp = GAM() * Rg / (GAM() - 1.0);
-    let kt = mu * cp / P.gas.z;
-    let T0c = w0.w / (w0.x * Rg);
-    let Tp = wp.w / (wp.x * Rg); let Tm = wm.w / (wm.x * Rg);
-    let Tn = wn.w / (wn.x * Rg); let Ts = ws.w / (ws.x * Rg);
+    let kt = mu * cpMix(Y0) / P.gas.z;
+    let T0c = w0.w / (w0.x * rMix(Y0));
+    let Tp = wp.w / (wp.x * rMix(ap.Y)); let Tm = wm.w / (wm.x * rMix(am.Y));
+    let Tn = wn.w / (wn.x * rMix(aup.Y)); let Ts = ws.w / (ws.x * rMix(adn.Y));
     let lapT = (Tp - 2.0 * T0c + Tm) / dz2
              + ((rR * (Tn - T0c) - rL * (T0c - Ts)) / (rc * dr2));
     L.w = L.w + phi + kt * lapT + mu * (w0.y * lapz + w0.z * lapr);
+
+    /* Species diffusion at unity Schmidt number. With two real gases this is no longer
+       cosmetic: an unmixed interface would keep a discontinuous equation of state, and it
+       is the sub-grid part that stands in for the turbulent mixing axial symmetry forbids. */
+    let lapY = (ap.Y - 2.0 * Y0 + am.Y) / dz2
+             + ((rR * (aup.Y - Y0) - rL * (Y0 - adn.Y)) / (rc * dr2));
+    Ld = Ld + mu * lapY;
   }
 
   let wgt = P.gas.w;
   var Un = (1.0 - wgt) * (Ua[k] + dt * L) + wgt * Uold[k];
-
-  // ---- exhaust tracer, carried by the mass flux with an upwind mass fraction ----
-  let Yl = Da[cIdx(iz - 1, ir)] / max(Wat(iz - 1, ir).x, RHO_FLOOR());
-  let Y0 = Da[k] / max(w0.x, RHO_FLOOR());
-  let Yr = Da[cIdx(iz + 1, ir)] / max(Wat(iz + 1, ir).x, RHO_FLOOR());
-  let Yd = Da[cIdx(iz, ir - 1)] / max(Wat(iz, ir - 1).x, RHO_FLOOR());
-  let Yu = Da[cIdx(iz, ir + 1)] / max(Wat(iz, ir + 1).x, RHO_FLOOR());
-  var yzL = Y0; if (fzL.x >= 0.0) { yzL = Yl; }
-  var yzR = Y0; if (fzR.x <  0.0) { yzR = Yr; }
-  var yrL = Y0; if (frL.x >= 0.0) { yrL = Yd; }
-  var yrR = Y0; if (frR.x <  0.0) { yrR = Yu; }
-  let Ld = -(fzR.x * yzR - fzL.x * yzL) / dz
-           - (rR * frR.x * yrR - rL * frL.x * yrL) / (rc * dr);
   var Dn = (1.0 - wgt) * (Da[k] + dt * Ld) + wgt * Dold[k];
   Dn = Dn * exp(-P.flu.z * dt);
 
@@ -1207,8 +1513,9 @@ fn waveSpeed(@builtin(global_invocation_id) g : vec3<u32>) {
   if (iz >= P.cells.x || ir >= P.cells.y) { return; }
   let k = u32(ir * P.cells.x + iz);
   if (blocked(iz, ir)) { wav[k] = vec2<f32>(0.0); return; }
-  let w = toPrim(Ua[k]);
-  let a = sqrt(GAM() * w.w / w.x);
+  let a0 = toPrim(Ua[k], Da[k]);
+  let w = a0.w;
+  let a = sqrt(gamMix(a0.Y) * w.w / w.x);
   let sp = (abs(w.y) + a) / P.d.x + (abs(w.z) + a) / P.d.y;
   let mach = length(vec2<f32>(w.y, w.z)) / a;
   wav[k] = vec2<f32>(sp, mach);
@@ -1225,23 +1532,64 @@ fn initState(@builtin(global_invocation_id) g : vec3<u32>) {
   Db[k] = 0.0;
 }
 
-/* One radial column at the measurement plane: (u_z, rho, p, Mach) per cell. */
+/* Axial pressure force on the external surface, one axial slab per thread, written into the
+   tail of the probe buffer for the host to sum.
+
+   For each slab the surface spans radii R0 to R1; the ring's projected area is what the axial
+   force acts on, so the integral is (p - p_ambient) . 2*pi*r*dr over that span, signed by
+   whether the ring faces forward or aft. Pressure is sampled from the fluid cell adjacent to
+   the surface on the side the flow is actually on: upstream of a forward-facing ring, aft of
+   the base. Skin friction is not included -- see the note in the panel. */
+@compute @workgroup_size(64)
+fn forceGather(@builtin(global_invocation_id) g : vec3<u32>) {
+  let iz = i32(g.x);
+  if (iz >= P.cells.x) { return; }
+  let dz = P.d.x; let dr = P.d.y; let pa = P.env.y;
+  let R0 = extR(f32(iz) * dz);
+  let R1 = extR(f32(iz + 1) * dz);
+  var fz = 0.0;
+  let rlo = min(R0, R1); let rhi = max(R0, R1);
+  if (rhi > rlo + 1.0e-9) {
+    let forward = R1 > R0;
+    var sgn = -1.0; if (forward) { sgn = 1.0; }
+    let step = select(1, -1, forward);              // walk away from the surface
+    let ir0 = clamp(i32(rlo / dr), 0, P.cells.y - 1);
+    let ir1 = clamp(i32(rhi / dr), 0, P.cells.y - 1);
+    for (var ir = ir0; ir <= ir1; ir++) {
+      let ra = max(f32(ir) * dr, rlo);
+      let rb = min(f32(ir + 1) * dr, rhi);
+      if (rb <= ra) { continue; }
+      var kz = clamp(iz + step, 0, P.cells.x - 1);
+      for (var s = 0; s < 8; s++) {
+        if (!blocked(kz, ir)) { break; }
+        kz = clamp(kz + step, 0, P.cells.x - 1);
+      }
+      let k = cIdx(kz, ir);
+      let w = toPrim(Ua[k], Da[k]);
+      // geometry is in millimetres and pressure in pascals, so the area needs converting
+      fz = fz + sgn * (w.w.w - pa) * PI * (rb * rb - ra * ra) * 1.0e-6;
+    }
+  }
+  probeB[u32(8 * P.cells.y) + u32(iz)] = fz;
+}
+
+/* One radial column at the measurement plane: (u_z, rho, p, Mach, Y, T) per cell. */
 @compute @workgroup_size(64)
 fn probeGather(@builtin(global_invocation_id) g : vec3<u32>) {
   let ir = i32(g.x);
   if (ir >= P.cells.y) { return; }
   let iz = clamp(i32(P.misc.y), 0, P.cells.x - 1);
-  var w = vec4<f32>(P.env.z, 0.0, 0.0, P.env.y);
-  if (!blocked(iz, ir)) { w = toPrim(Ua[u32(ir * P.cells.x + iz)]); }
-  var Y = 0.0;
-  if (!blocked(iz, ir)) { Y = clamp(Da[u32(ir * P.cells.x + iz)] / w.x, 0.0, 1.0); }
-  let a = sqrt(GAM() * w.w / w.x);
+  var a0 = Prim(vec4<f32>(P.env.z, 0.0, 0.0, P.env.y), 0.0);
+  if (!blocked(iz, ir)) { let k = u32(ir * P.cells.x + iz); a0 = toPrim(Ua[k], Da[k]); }
+  let w = a0.w;
+  let a = sqrt(gamMix(a0.Y) * w.w / w.x);
   let b = u32(ir) * 8u;
   probeB[b + 0u] = w.y;
   probeB[b + 1u] = w.x;
   probeB[b + 2u] = w.w;
   probeB[b + 3u] = length(vec2<f32>(w.y, w.z)) / a;
-  probeB[b + 4u] = Y;
+  probeB[b + 4u] = a0.Y;
+  probeB[b + 5u] = w.w / (w.x * rMix(a0.Y));
 }
 `;
 
@@ -1255,7 +1603,10 @@ struct Show { viewport : vec2<f32>, field : f32, scale : f32,
 fn cIdx(iz : i32, ir : i32) -> u32 {
   return u32(clamp(ir, 0, P.cells.y - 1) * P.cells.x + clamp(iz, 0, P.cells.x - 1));
 }
-fn prim(iz : i32, ir : i32) -> vec4<f32> { return toPrim(Ua[cIdx(iz, ir)]); }
+fn prim(iz : i32, ir : i32) -> Prim {
+  let k = cIdx(iz, ir);
+  return toPrim(Ua[k], Da[k]);
+}
 
 @vertex fn vs(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
   let v = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -1286,16 +1637,16 @@ fn diverging(t : f32) -> vec3<f32> {
   let sld = solidAt(p2);
   let fld = i32(SH.field);
   if (sld != WALL) {
-    let w = prim(iz, ir);
-    let a = sqrt(GAM() * w.w / w.x);
-    let dye = clamp(Da[cIdx(iz, ir)] / w.x, 0.0, 1.0);
+    let a0 = prim(iz, ir);
+    let w = a0.w; let Y = a0.Y;
+    let a = sqrt(gamMix(Y) * w.w / w.x);
     if (fld == 0) {
-      col = mix(col, vec3<f32>(1.0, 0.87, 0.62), pow(dye, 0.7));
+      col = mix(col, vec3<f32>(1.0, 0.87, 0.62), pow(Y, 0.7));
     } else if (fld == 1) {
       col = viridis(length(vec2<f32>(w.y, w.z)) / max(SH.scale, 1e-6));
     } else if (fld == 2) {
-      let wp = prim(iz + 1, ir); let wm = prim(iz - 1, ir);
-      let wn = prim(iz, ir + 1); let ws = prim(iz, ir - 1);
+      let wp = prim(iz + 1, ir).w; let wm = prim(iz - 1, ir).w;
+      let wn = prim(iz, ir + 1).w; let ws = prim(iz, ir - 1).w;
       let vort = (wp.z - wm.z) / (2.0 * P.d.x) - (wn.y - ws.y) / (2.0 * P.d.y);
       var sgn = 1.0; if ((uv.y - 0.5) < 0.0) { sgn = -1.0; }
       col = diverging(clamp(sgn * vort / max(SH.scale, 1e-6), -1.0, 1.0));
@@ -1309,11 +1660,11 @@ fn diverging(t : f32) -> vec3<f32> {
       col = viridis(M / max(SH.scale, 1e-6));
       if (abs(M - 1.0) < 0.015 * max(SH.scale, 1.0)) { col = vec3<f32>(1.0, 1.0, 1.0); }
     } else if (fld == 7) {
-      col = viridis(w.w / (w.x * RGAS()) / max(SH.scale, 1e-6));
+      col = viridis(w.w / (w.x * rMix(Y)) / max(SH.scale, 1e-6));
     } else {
       // numerical schlieren: 1 - exp(-k |grad rho|) is how shocks are shown in practice
-      let gz = (prim(iz + 1, ir).x - prim(iz - 1, ir).x) / (2.0 * P.d.x);
-      let gr = (prim(iz, ir + 1).x - prim(iz, ir - 1).x) / (2.0 * P.d.y);
+      let gz = (prim(iz + 1, ir).w.x - prim(iz - 1, ir).w.x) / (2.0 * P.d.x);
+      let gr = (prim(iz, ir + 1).w.x - prim(iz, ir - 1).w.x) / (2.0 * P.d.y);
       let sc = length(vec2<f32>(gz, gr)) / max(SH.scale, 1e-9);
       let v = 1.0 - exp(-3.0 * sc);
       col = vec3<f32>(v, v, v);
@@ -1358,7 +1709,7 @@ async function compInit(){
   const plK = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglF] });
   const plS = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglS, WG.bglS] });
   CP.pipe = {};
-  for (const n of ['fluxZ','fluxR','update','waveSpeed','initState','probeGather'])
+  for (const n of ['fluxZ','fluxR','update','waveSpeed','initState','probeGather','forceGather'])
     CP.pipe[n] = dev.createComputePipeline({ layout:plK, compute:{ module:modK, entryPoint:n } });
   CP.pipe.show = dev.createRenderPipeline({ layout:plS,
     vertex:{ module:modS, entryPoint:'vs' },
@@ -1378,10 +1729,11 @@ function compAlloc(){
   const B = CP.buf;
   B.U = [mk(nC,16), mk(nC,16), mk(nC,16)];
   B.D = [mk(nC,4),  mk(nC,4),  mk(nC,4)];
-  B.Fz = mk((S.Nz + 1) * S.Nr, 16);
-  B.Fr = mk(S.Nz * (S.Nr + 1), 16);
+  // 32 bytes per face: the four conserved fluxes plus the species flux, padded to vec4
+  B.Fz = mk((S.Nz + 1) * S.Nr, 32);
+  B.Fr = mk(S.Nz * (S.Nr + 1), 32);
   B.wav = mk(nC, 8);
-  B.probe = mk(S.Nr * 8, 4);
+  B.probe = mk(S.Nr * 8 + S.Nz + 8, 4);   // probe column, then one axial force per station
 
   CP.bg = [];
   for (let i = 0; i < 3; i++){
@@ -1417,12 +1769,13 @@ function compAlloc(){
     { binding:1, resource:{ buffer:L.out } }]}));
 
   CP.stageMax   = dev.createBuffer({ size:8, usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  CP.stageProbe = dev.createBuffer({ size:Math.max(32, S.Nr * 32),
+  CP.probeBytes = (S.Nr * 8 + S.Nz) * 4;
+  CP.stageProbe = dev.createBuffer({ size:Math.max(32, CP.probeBytes),
     usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   CP.mapBusy = false;
   CP.gen = (CP.gen || 0) + 1;
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gamma * P.Rgas * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
   CP.machMax = 0;
 }
 
@@ -1447,7 +1800,7 @@ function compReset(){
   pass.end();
   dev.queue.submit([enc.finish()]);
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gamma * P.Rgas * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
   CP.machMax = 0;
 }
 
@@ -1487,6 +1840,7 @@ function compSteps(n){
   pass.setBindGroup(1, CP.bg[CP.idx][0]);
   pass.setPipeline(CP.pipe.waveSpeed);   pass.dispatchWorkgroups(gc[0], gc[1]);
   pass.setPipeline(CP.pipe.probeGather); pass.dispatchWorkgroups(Math.ceil(S.Nr / 64));
+  pass.setPipeline(CP.pipe.forceGather); pass.dispatchWorkgroups(Math.ceil(S.Nz / 64));
   pass.setPipeline(WG.pipe.reduceMax);
   CP.red.forEach((L, i) => {
     pass.setBindGroup(0, CP.bgRP, [i * PARAM_STRIDE]);
@@ -1498,10 +1852,10 @@ function compSteps(n){
   const last = CP.red[CP.red.length - 1];
   // Capture the staging buffers and the grid generation now: a rebuild may swap both out
   // before this readback resolves, and unmapping the wrong buffer corrupts the next submit.
-  const sMax = CP.stageMax, sProbe = CP.stageProbe, gen = CP.gen, nr = S.Nr;
+  const sMax = CP.stageMax, sProbe = CP.stageProbe, gen = CP.gen, nb = CP.probeBytes;
   if (!CP.mapBusy){
     enc.copyBufferToBuffer(last.out, 0, sMax, 0, 8);
-    enc.copyBufferToBuffer(B.probe, 0, sProbe, 0, nr * 32);
+    enc.copyBufferToBuffer(B.probe, 0, sProbe, 0, nb);
   }
   dev.queue.submit([enc.finish()]);
 
@@ -1517,13 +1871,61 @@ function compSteps(n){
       if (!Number.isFinite(m[0]) || m[0] <= 0){ flagDivergence(NaN); return; }
       CP.waveMax = m[0];
       CP.machMax = m[1];
-      S.vmax = Math.max(CP.machMax * Math.sqrt(P.gamma * P.Rgas * P.tAmb), 1);
+      S.vmax = Math.max(CP.machMax * env().aA, 1);
       consumeProbeArr(pr, tag);
     }).catch(() => { if (gen === CP.gen) CP.mapBusy = false; });
   }
 
   S.t += simmed;
+  if (P.accelerate) advanceFlight(simmed);
   return simmed;
+}
+
+/* Quasi-steady trajectory coupling. The flow settles in about 2 ms and a burn lasts seconds,
+   so the two clocks are separated by orders of magnitude: the trajectory is integrated on its
+   own clock and the fast-forward factor between them is a control rather than something to
+   derive. Thrust and drag come from the last readback, which makes this an explicit step
+   lagged by a frame, which is negligible at this ratio.
+
+   Level flight is the axial force balance alone. Vertical adds weight and tracks altitude,
+   which feeds back into the ambient pressure through the scale height. */
+function advanceFlight(simmedMs){
+  const m = S.meas;
+  if (!m) return;
+  const dtF = simmedMs * 1e-3 * Math.pow(10, P.ffLog);   // ms of flow -> s of flight
+  const mass = Math.max(dryMass() + S.propLeft, 1e-6);
+  const g = climbing() ? P.gSurf : 0;
+
+  /* Point mass over a flat planet with the body axis along the velocity vector, that is, at
+     zero angle of attack, which is the case an axisymmetric solver with an axial freestream
+     represents. Level and vertical are the degenerate cases: no gravity, and a flight path
+     starting at the zenith with nothing to rotate it, since dfpa/dt goes as cos(fpa). */
+  if (turning() && !S.kicked && S.vFlight >= P.kickSpeed){
+    S.fpa = (90 - P.kickAngle) * Math.PI / 180;          // deliberate pitch-over off the pad
+    S.kicked = true;
+  }
+  const sinF = climbing() ? Math.sin(S.fpa) : 0;
+  const v = S.vFlight + (m.net / mass - g * sinF) * dtF;
+  // The solver represents nose-first flight only, so a vertical climb terminates at apogee
+  // rather than reversing. Requires prior climb: a vehicle on the pad is also at zero airspeed.
+  if (climbing() && !turning() && S.vFlight > 1 && v <= 0) S.apogee = true;
+  S.vFlight = Math.max(0, v);
+  if (turning() && S.vFlight > 1){
+    S.fpa -= (g * Math.cos(S.fpa) / S.vFlight) * dtF;
+    S.fpa = Math.max(-Math.PI / 2, S.fpa);
+  }
+  if (climbing()){
+    S.alt += S.vFlight * Math.sin(S.fpa) * dtF;
+    S.range += S.vFlight * Math.cos(S.fpa) * dtF;
+    S.altMax = Math.max(S.altMax, S.alt);
+    // requires prior climb: a vehicle on the pad is also at zero altitude
+    if (S.altMax > 10 && S.alt <= 0){ S.alt = 0; S.impact = true; }
+  }
+  if (S.propLeft > 0){
+    S.propLeft = Math.max(0, S.propLeft - Math.max(m.mdot, 0) * dtF);
+    if (S.propLeft <= 0 && S.shutT < 0) S.shutT = S.t;    // note the flow time of burnout
+  }
+  S.flightT += dtF;
 }
 
 function compRender(targetView, outW, outH){
@@ -1654,7 +2056,7 @@ function drawPlot(){
   pctx.clearRect(0,0,w,h);
   DOM.plotTitle.textContent =
     `axial velocity at the measurement plane, ${P.probe > 0 ? fmt(P.probe,0) + ' mm past the ' : 'at the '}` +
-    `nozzle exit   —   on-axis (cyan) and plane maximum (orange)`;
+    `nozzle exit, against flow time.   on-axis (cyan), plane maximum (orange)`;
 
   const ser = S.series;
   if (ser.length < 2) return;
@@ -1894,7 +2296,7 @@ async function currentDtLimit(){
   if (Number.isFinite(m[0]) && m[0] > 0) CP.waveMax = m[0];
   if (Number.isFinite(m[1])){
     CP.machMax = m[1];
-    S.vmax = Math.max(m[1] * Math.sqrt(P.gamma * P.Rgas * P.tAmb), 1);
+    S.vmax = Math.max(m[1] * env().aA, 1);
   }
   return compChooseDt();
 }
@@ -1919,9 +2321,9 @@ const EXP = { running:false, cancel:false, scale:null, slots:null, sw:0, sh:0, r
 /* A WebGPU canvas does not present until a task boundary, so drawImage() straight after
    submit() yields a blank frame. Render into our own texture and copy it out instead:
    deterministic, and it works at any resolution without touching the visible canvas. */
-/* One field per frame used to mean one GPU round trip per field, and those serialise:
-   seven fields cost seven full stalls rather than seven cheap renders. Issue all the
-   renders and copies first, then wait on the maps together. */
+/* All the renders and copies are issued first and the maps awaited together. One round
+   trip per field would serialise: eight fields would cost eight full GPU stalls rather
+   than eight cheap renders. */
 function exportRenderSlot(k, w, h){
   const dev = WG.dev;
   if (!EXP.slots || EXP.sw !== w || EXP.sh !== h){
@@ -2057,7 +2459,7 @@ async function runExport(fields){
         peak = Math.max(peak, S.vmax);
         if (i % 8 === 0){
           setProgress((i + 1) / total * 0.35,
-            `pass 1 of 2 — scanning for the colour range, ${((i+1)/total*100).toFixed(0)}%`);
+            `pass 1 of 2, scanning for the colour range: ${((i+1)/total*100).toFixed(0)}%`);
           await new Promise(r => setTimeout(r, 0));
         }
       }
@@ -2105,7 +2507,7 @@ async function runExport(fields){
         const el = performance.now() - t0;
         const eta = (el / (i + 1)) * (total - i - 1) / 1000;
         setProgress(0.35 + (i + 1) / total * 0.65,
-          `pass 2 of 2 — encoding ${i+1}/${total} · ${fields.length} field` +
+          `pass 2 of 2, encoding ${i+1}/${total} · ${fields.length} field` +
           `${fields.length > 1 ? 's' : ''} · ${nSub} sub-steps · t = ${S.t.toFixed(2)} ms · ` +
           `${eta.toFixed(0)} s left`);
         await new Promise(r => setTimeout(r, 0));
@@ -2128,7 +2530,7 @@ async function runExport(fields){
     setProgress(0, `<span style="color:var(--bad)">Encoder error: ${fatal.message || fatal}</span>`);
     return;
   }
-  if (!sinks[0].frames.length){ setProgress(0, 'Cancelled — nothing written.'); return; }
+  if (!sinks[0].frames.length){ setProgress(0, 'Cancelled; nothing written.'); return; }
 
   const base = `rocket_e${derived().eps.toFixed(1)}_pc${P.pcBar}bar_${flightMs}ms`;
   let bytes = 0;
@@ -2144,7 +2546,7 @@ async function runExport(fields){
     saveBlob(blob, name);
     if (k < fields.length - 1) await new Promise(r => setTimeout(r, 350));  // browsers throttle bursts
   }
-  setProgress(1, `Done — ${fields.length} file${fields.length > 1 ? 's' : ''}, ` +
+  setProgress(1, `Done. ${fields.length} file${fields.length > 1 ? 's' : ''}, ` +
     `${sinks[0].frames.length} frames each, ${(bytes/1e6).toFixed(1)} MB total, ` +
     `${(sinks[0].frames.length/fps).toFixed(1)} s of video.`);
 }
@@ -2161,10 +2563,17 @@ function drawOverlay(cx, w, h, headerH, simH, footerH, sc){
   cx.textBaseline = 'middle';
   cx.textAlign = 'left';
   const pad = Math.round(10 * sc);
-  cx.fillText(`t = ${S.t.toFixed(2)} ms`, pad, headerH * 0.32);
+  const Dv = derived(), mm = S.meas;
+  cx.fillText(`flow t = ${S.t.toFixed(2)} ms` +
+              (mm ? `    thrust ${fmt(mm.thrust,0)} N    drag ${fmt(mm.drag,0)} N` +
+                    `    net ${fmt(mm.net,0)} N` : '') +
+              (P.accelerate ? `    flight T+${fmt(S.flightT,2)} s    v ${fmt(Dv.vInf,0)} m/s` +
+                              `    ${fmt(Dv.accel/G0,1)} g` +
+                              (climbing() ? `    +${fmt(S.alt/1000,2)} km` : '') +
+                              (turning() ? `    path ${fmt(Dv.fpaDeg,0)}\u00b0` : '') : ''),
+              pad, headerH * 0.32);
   cx.fillStyle = '#8b97a6';
   cx.font = `${Math.round(11 * sc)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  const Dv = derived();
   cx.fillText(`\u03b5 ${fmt(Dv.eps,2)} \u00b7 p_c ${fmt(P.pcBar,0)} bar \u00b7 T_c ${fmt(P.Tc,0)} K \u00b7 ` +
               `p_amb ${fmtP(Dv.pa)} \u00b7 M\u221e ${fmt(Dv.machInf,2)} \u00b7 ` +
               `${P.nozShape === 0 ? 'conical' : 'bell'} nozzle`,
@@ -2209,6 +2618,7 @@ const sliders = {};
 let pendingRebuild = false;
 
 function fmtVal(it, v){
+  if (it.kind === 'check') return v ? 'on' : 'off';
   if (it.choices) return it.choices[Math.round(v)] || String(v);
   if (it.log){
     const x = Math.pow(10, v);
@@ -2222,7 +2632,67 @@ function fmtVal(it, v){
 
 /* A discrete choice is a <select> and pushes a history entry; a slider is a range and
    replaces the current one, so dragging does not fill the back button with intermediates. */
+const CHOICE_TABLES = { PROPELLANTS, ATMOSPHERES };
+const CHOICE_ROWS = [];
+
+/* A row of buttons that each set several parameters at once. Composition cannot be
+   interpolated the way a slider value can, so these are the natural control for it. */
+function addChoiceRow(body, it){
+  const opts = CHOICE_TABLES[it.opts];
+  const wrap = document.createElement('div');
+  wrap.className = 'ctl';
+  wrap.innerHTML = `<div class="lab"><span>${it.t}</span></div>` +
+                   `<div class="btnrow presets"></div>` +
+                   (it.hint ? `<div class="hint">${it.hint}</div>` : '');
+  body.appendChild(wrap);
+  const row = wrap.querySelector('.presets');
+  for (const o of opts){
+    const b = document.createElement('button');
+    b.innerHTML = `<b>${o.n}</b><i>${o.d}</i>`;
+    b.addEventListener('click', () => {
+      Object.assign(P, o.p);
+      syncSliders();
+      buildGrid(); pendingRebuild = false;
+      scheduleURLSync(true); updateMetrics();
+    });
+    row.appendChild(b);
+  }
+  CHOICE_ROWS.push({ row, opts });
+}
+
+/* Highlight whichever button matches the live configuration, if any. */
+function markActiveChoices(){
+  for (const { row, opts } of CHOICE_ROWS){
+    [...row.children].forEach((b, i) => {
+      const o = opts[i];
+      const on = Object.keys(o.p).every(k =>
+        Math.abs(P[k] - o.p[k]) <= (SPEC[k].step || 1e-9) * 0.5001);
+      b.classList.toggle('active', on);
+    });
+  }
+}
+
 function addControl(body, it){
+  if (it.kind === 'buttons'){ addChoiceRow(body, it); return; }
+  if (it.kind === 'check'){
+    const wrap = document.createElement('div');
+    wrap.className = 'ctl';
+    wrap.innerHTML = `<label class="chk"><input type="checkbox" id="s_${it.k}"> ${it.t}</label>` +
+                     (it.hint ? `<div class="hint">${it.hint}</div>` : '');
+    body.appendChild(wrap);
+    const box = wrap.querySelector('input');
+    box.checked = !!it.v;
+    box.toggleAttribute('checked', box.checked);
+    sliders[it.k] = { inp:box, out:null, it, check:true };
+    box.addEventListener('change', () => {
+      P[it.k] = box.checked ? 1 : 0;
+      box.toggleAttribute('checked', box.checked);
+      if (P[it.k]) resetSim();          // the trajectory starts from the airspeed on the slider
+      scheduleURLSync(true);
+      updateMetrics();
+    });
+    return;
+  }
   const wrap = document.createElement('div');
   wrap.className = 'ctl' + (it.rebuild ? ' rebuild' : '');
   if (it.choices){
@@ -2335,7 +2805,7 @@ function updateExportDerived(){
         <option value="0">Exhaust fraction</option>
         <option value="1">Speed |u|</option>
         <option value="5">Mach number</option>
-        <option value="6">Schlieren — shocks</option>
+        <option value="6">Schlieren (shocks)</option>
         <option value="3">Pressure</option>
         <option value="7">Temperature</option>
         <option value="4">Axial velocity u_z</option>
@@ -2378,10 +2848,9 @@ function markActiveQuality(){
   d.open = true;
   d.innerHTML = `<summary>Quality</summary><div class="body">
     <div class="btnrow presets" id="qrow"></div>
-    <div class="hint" style="margin-top:6px">Cost is roughly linear in the radial cell count,
-    not quadratic: the timestep is set by the cell size, so a finer grid pays twice —
-    once in cells and once in steps. Check the throat resolution in the panel before
-    believing any number.</div></div>`;
+    <div class="hint" style="margin-top:6px">Cost is roughly linear in the radial cell count
+    rather than quadratic: the timestep is set by the cell size, so a finer grid costs both
+    more cells and more steps. Check the throat resolution in the panel.</div></div>`;
   const row = d.querySelector('#qrow');
   for (const q of QUALITY){
     const b = document.createElement('button');
@@ -2401,9 +2870,8 @@ function markActiveQuality(){
   const d = document.createElement('details');
   d.open = true;
   d.innerHTML = `<summary>Presets</summary><div class="body"><div class="btnrow presets"></div>
-    <div class="hint" style="margin-top:6px">Each one sets the nozzle, the chamber and the
-    atmosphere together — the point being that a nozzle is only ever right for one
-    altitude.</div></div>`;
+    <div class="hint" style="margin-top:6px">Each preset sets nozzle, chamber, propellant and
+    atmosphere together, since a given nozzle is matched to one ambient pressure.</div></div>`;
   const row = d.querySelector('.presets');
   for (const pr of PRESETS){
     const b = document.createElement('button');
@@ -2422,8 +2890,16 @@ function markActiveQuality(){
 function syncSliders(){
   for (const k in sliders){
     const s = sliders[k];
+    if (s.check){
+      s.inp.checked = !!P[k];
+      s.inp.toggleAttribute('checked', s.inp.checked);   // so DOM clones keep the state
+      P[k] = s.inp.checked ? 1 : 0;
+      continue;
+    }
     s.inp.value = P[k];
     P[k] = parseFloat(s.inp.value);          // re-read so clamping to the control's range applies
+    if (s.it.choices)
+      for (const o of s.inp.options) o.toggleAttribute('selected', o.value === s.inp.value);
     if (s.out) s.out.textContent = fmtVal(s.it, P[k]);
   }
 }
@@ -2431,20 +2907,27 @@ function syncSliders(){
 document.getElementById('note').innerHTML =
   `<b>↻</b> marks parameters that rebuild the grid and restart the run.
    <b>Enter</b> re-ignites, <b>space</b> pauses.<br><br>
-   <b>What this models.</b> A hot-gas plenum at the head of a combustion chamber, a
-   converging–diverging nozzle you can shape, and the outside of the vehicle sitting in a
-   freestream. The solver is compressible Navier–Stokes in cylindrical coordinates, so it
-   carries acoustics: the throat chokes on its own, shocks form where they must, and an
-   over-expanded nozzle separates without being told to.<br><br>
-   <b>What it does not model.</b> Combustion, mixing, injector elements, multiple species,
-   radiation, ablation, and any chemistry at all — the chamber is simply held at a stagnation
-   pressure and temperature. One γ and one gas constant apply to the exhaust and to the
-   atmosphere alike. Axial symmetry forbids the three-dimensional instabilities that break a
-   real shear layer up, so the Smagorinsky term stands in for them.<br><br>
-   <b>What to trust.</b> Structure: where the sonic line sits, whether the flow separates
-   inside the bell, the shock-diamond spacing in an under-expanded plume, how the base flow
-   and the plume interact. The 1-D ideal numbers in the panel are exact for what they assume.
-   The measured numbers are grid-dependent — use them to rank designs, not to quote thrust.`;
+   <b>Model.</b> A hot-gas plenum at the head of a combustion chamber, a converging-diverging
+   nozzle, and the external surface of the vehicle in a freestream. The solver is compressible
+   Navier-Stokes in cylindrical coordinates and resolves acoustics, so choking, shock formation
+   and separation are results rather than inputs.<br><br>
+   <b>Gases.</b> Exhaust and atmosphere have separate γ and gas constants and mix by mass
+   fraction, so the plume boundary carries a molecular-weight jump as well as a temperature
+   jump. Set them with the <b>Propellant</b> and <b>Atmosphere</b> buttons.<br><br>
+   <b>Clocks.</b> <b>Flow time</b>, in milliseconds, is the CFD clock: the interval of gas
+   dynamics simulated. It labels the readout and the plot axis. <b>Flight time</b>, in seconds,
+   is the trajectory clock. The flow settles in about 2 ms while a burn lasts seconds, so the
+   trajectory is advanced by a fast-forward factor, printed alongside it. The two advance
+   together only at 1×. <b>Wall time</b> appears only in the performance line.<br><br>
+   <b>Not modelled.</b> Chemistry: specific heats are constant, so there is no dissociation in
+   the chamber and no recombination during expansion. Figures are therefore frozen-flow values.
+   No combustion, injector elements, radiation or ablation; the chamber is held at a stagnation
+   pressure and temperature. Axial symmetry excludes three-dimensional shear-layer
+   instabilities, for which the Smagorinsky term substitutes.<br><br>
+   <b>Interpretation.</b> Structural results are reliable: sonic-line position, whether the
+   flow separates inside the bell, shock-cell spacing, base-flow behaviour. The 1-D figures are
+   exact under their stated assumptions. The measured figures are grid-dependent and suit
+   ranking designs rather than quoting absolute values.`;
 
 /* ==========================================================================
    Shareable links. State lives in the fragment rather than the query string:
@@ -2458,7 +2941,10 @@ const URLKEY = {
   throatR:'tr', nozExitR:'er', convLen:'vl', divLen:'dl', nozShape:'ns',
   noseType:'nt', noseLen:'nl', foreLen:'fl', wallT:'wt',
   pAmbLog:'pa', tAmb:'ta', vAmb:'va',
-  gamma:'ga', Rgas:'rg', visc:'nu', smag:'cs', dyeDiss:'dd',
+  gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',
+  visc:'nu', smag:'cs', dyeDiss:'dd',
+  accelerate:'ac', flightMode:'fm', dryMassLog:'dm', propMassLog:'pm', ffLog:'ff', gSurf:'gs',
+  kickSpeed:'ks', kickAngle:'ka',
   downrange:'dn', rDomain:'rd', zAspect:'za', res:'rs', cfl:'cf', budget:'bg', spf:'sp',
   probe:'pb',
   vidFlight:'vf', vidMsPerFrame:'vm', vidFps:'vr', vidWidth:'vw', vidMbps:'vb',
@@ -2496,8 +2982,11 @@ function applyStateFromURL(){
     const pk = URLKEY_INV[key];
     if (pk && Number.isFinite(num)){
       const sp = SPEC[pk];
-      P[pk] = Math.min(sp.max, Math.max(sp.min, num));   // clamp: links can be hand-edited
-      if (sp.choices) P[pk] = Math.round(P[pk]);
+      if (sp.kind === 'check') P[pk] = num ? 1 : 0;
+      else {
+        P[pk] = Math.min(sp.max, Math.max(sp.min, num));   // clamp: links can be hand-edited
+        if (sp.choices) P[pk] = Math.round(P[pk]);
+      }
       any = true;
     }
     else if (key === 'ap'){ OPT.autoPace = num !== 0; any = true; }
@@ -2542,8 +3031,8 @@ function scheduleURLSync(push){
   urlTimer = setTimeout(() => writeURL(false), 250);
 }
 
-/* Back and forward must actually restore the configuration, and restart the run — otherwise
-   you are looking at one nozzle's flow inside another nozzle's geometry. */
+/* Back and forward restore the configuration and restart the run, so that the flow shown
+   always belongs to the geometry shown. */
 function onHistoryNav(){
   clearTimeout(urlTimer);
   Object.assign(P, DEFAULTS);               // clear first: the target URL may omit keys
@@ -2648,16 +3137,31 @@ function frame(){
   }
 
   const steps = OPT.autoPace ? Math.max(1, Math.round(S.spfAuto)) : P.spf;
-  const C = chamberState(S.t);
+  const C = chamberState(S.t), mm = S.meas;
+  const D0 = derived();
+  /* Two clocks, and they are not the same thing, so both are named every time they appear.
+     FLOW time is the CFD clock: how much gas dynamics has been simulated, milliseconds.
+     FLIGHT time is the trajectory clock: how far along the burn the vehicle is, seconds.
+     They advance together only at 1x fast-forward. */
   hud.textContent =
-    `t = ${S.t.toFixed(3)} ms   dt = ${(S.dt*1e6).toFixed(2)} ns   ` +
+    `flow t = ${S.t.toFixed(3)} ms   dt = ${(S.dt*1e6).toFixed(2)} ns   ` +
     `max Mach ${CP.machMax.toFixed(2)}   peak |u| ${S.vmax.toFixed(0)} m/s\n` +
     `chamber ${(C.p/1e5).toFixed(2)} bar   ${C.T.toFixed(0)} K` +
-    (S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') + `\n` +
+    (S.shutT >= 0 ? '   ○ burnt out, coasting' : S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') +
+    `   M∞ ${D0.machInf.toFixed(2)}\n` +
+    `thrust ${mm ? mm.thrust.toFixed(0) : '—'} N   drag ${mm ? mm.drag.toFixed(0) : '—'} N   ` +
+    `net ${mm ? mm.net.toFixed(0) : '—'} N` +
+    (mm && mm.thrust < 0 ? '  (engine off: inlet drag, not thrust)' : '') + `\n` +
+    (P.accelerate
+      ? `flight T+${S.flightT.toFixed(2)} s   = flow t \u00d7 ${D0.ff.toFixed(0)} fast-forward\n` +
+        `   v ${D0.vInf.toFixed(0)} m/s   a ${(D0.accel/G0).toFixed(1)} g` +
+        (climbing() ? `   alt +${(S.alt/1000).toFixed(2)} km` : '   level flight') +
+        (turning() ? `   path ${D0.fpaDeg.toFixed(0)}\u00b0   downrange ${(S.range/1000).toFixed(2)} km` : '') +
+        `   prop ${(100*S.propLeft/Math.max(propMass(),1e-9)).toFixed(0)}%\n`
+      : ``) +
     `${fps.toFixed(0)} fps   ${steps} steps/frame   ` +
-    `${S.simRate.toFixed(2)} ms of flight per second\n` +
-    `compressible Navier–Stokes (HLLC / MUSCL / SSP-RK2)   ` +
-    `${(steps*6).toLocaleString()} dispatches/frame, 1 submit`;
+    `${S.simRate.toFixed(2)} ms of flow per wall second   ` +
+    `${(steps*7).toLocaleString()} dispatches/frame, 1 submit`;
 
   requestAnimationFrame(frame);
 }
@@ -2671,7 +3175,7 @@ function flagDivergence(v){
     (Number.isFinite(v) ? `${v.toFixed(0)}` : 'a non-finite value') +
     `. Almost always this is a positivity failure at a sharp corner under a very large ` +
     `pressure ratio. Lower the <b>CFL number</b>, lengthen the <b>ignition rise time</b>, ` +
-    `or raise the radial resolution so the throat is better resolved — then ignite again.`;
+    `or raise the radial resolution to resolve the throat better, then ignite again.`;
 }
 
 (async function boot(){
