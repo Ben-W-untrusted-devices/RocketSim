@@ -1,175 +1,178 @@
 # Rocket Sim
 
-An axisymmetric (r–z) **compressible Navier–Stokes** sandbox for a rocket's aft end: a
-hot-gas injector feeding a combustion chamber, a parametric converging–diverging nozzle, and
-the outside of the vehicle sitting in a freestream you choose. It runs entirely in the
-browser on WebGPU — open `index.html`, no build step and no server needed.
+An interactive, axisymmetric compressible-flow sandbox for a rocket's aft end. A hot-gas
+injector feeds a combustion chamber and a converging–diverging nozzle you can reshape with
+sliders, while the vehicle flies nose-first through an atmosphere you choose. Everything runs
+in the browser on WebGPU: the flow is solved, measured and drawn about thirty times a second
+while you drag things.
 
-Forked from [BenWheatley/Airzooka](https://github.com/BenWheatley/Airzooka), which asked the
-same kind of question about a 3D-printed air cannon. The compressible solver, the WebGPU
-plumbing, the video exporter and the shareable-link machinery are inherited from it; the
-geometry, the boundary conditions, the measurements and the physics being asked about are
-new.
+![The application: schlieren view of a matched nozzle at steady state, with the live readouts
+and the control panel](docs/img/app.png)
 
-**WebGPU is required.** Airzooka carried a WebGL2 fragment-shader fallback for its
-*incompressible* solver. Nothing here is incompressible — the whole point is shocks, choking
-and expansion — and a density-based scheme with an HLLC Riemann solver has no cheap
-fragment-shader form. Rather than ship a second solver that answers a different question, the
-fallback was deleted. Chrome 113+, Edge 113+, Safari 26+ and Firefox 141+ on Windows all
-work; elsewhere Firefox may need `dom.webgpu.enabled`.
+It exists to answer design questions you cannot get from a spreadsheet — *where does the flow
+separate, what does the plume do at this altitude, how much does the nose cone cost me* —
+while still putting the 1-D isentropic numbers next to the simulated ones so you can see when
+they disagree.
+
+## Run it
+
+Open `index.html`. No build step, no server, no dependencies.
+
+**WebGPU is required** — Chrome 113+, Edge 113+, Safari 26+, or Firefox 141+ on Windows.
+Firefox on Linux may need `dom.webgpu.enabled`. Without it the page says so rather than
+showing a blank canvas.
 
 ---
 
-## What it models
+## What you are looking at
 
-Along the axis, nose to tail:
+The view is a slice through the axis, mirrored about the centreline. Grey hatching is
+hardware; the orange band at the head of the chamber is the injector plenum; the vertical
+yellow line is the measurement plane.
 
-```
-freestream in ──► nose cone ── forebody ── chamber ── converging ── throat ── diverging ──► plume
-                  flat /                   ▲
-                  pointy /                 │ injector plenum, held at
-                  rounded                  │ stagnation p and T
-```
+![Geometry: nose cone, forebody, chamber full of exhaust, injector plenum, converging section,
+throat and bell](docs/img/geometry.png)
+
+Nose to tail: a **nose cone** (flat, pointy or rounded), a solid **forebody**, the
+**combustion chamber** with the **injector plenum** at its head, a **converging section**, the
+**throat**, and the **diverging bell**. Ambient air enters at the left at your chosen flight
+speed, flows over the vehicle, and meets the exhaust at the base.
+
+The injector is a band of cells held at a stagnation pressure and temperature. The flux
+solver treats it as ordinary fluid, so the nozzle **chokes on its own** — nothing tells it
+what mass flow to pass. That is why the choked-flow result further down counts as a
+prediction.
+
+### What you can change
+
+| group | parameters |
+|---|---|
+| **Chamber & injector** | chamber pressure and temperature, ignition rise time, chamber radius and length |
+| **Nozzle** | throat radius, exit radius, converging and diverging lengths, and a **conical or bell** divergent contour |
+| **Airframe** | nose cone shape and length, forebody length, wall thickness |
+| **Environment** | ambient pressure on a log slider from 0.01 to 125 kPa (sea level to about 65 km), ambient temperature, and flight speed |
+| **Gas** | γ, specific gas constant, viscosity, Smagorinsky constant, tracer fade |
+| **Domain & solver** | plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
+| **Measurement** | where the measurement plane sits, from the exit plane downstream |
+
+The body radius is `max(chamber, nozzle exit) + wall thickness`, so the base is always an
+annulus and there is always a base region for the plume and the external flow to fight over.
+
+---
+
+## A nozzle is only right at one altitude
+
+This is the thing the tool is best at showing. Same chamber, same throat, three different
+relationships between exit pressure and ambient — and three completely different flows.
+
+**Matched** — the default. Exit pressure 1.00× ambient. The plume leaves parallel, with only
+weak shock cells and a shear layer rolling up against the still air.
+
+![Matched nozzle, schlieren](docs/img/matched.png)
+
+**Over-expanded** — the same 40:1 vacuum bell fired at sea level. Exit pressure is 0.04×
+ambient, and the jet cannot fill the nozzle: it separates from the wall a short way past the
+throat and the rest of the bell is filled with recirculating gas. The panel flags this before
+you run it.
+
+![Over-expanded nozzle showing the jet separated from the bell wall](docs/img/overexpanded.png)
+
+**Under-expanded** — a stubby nozzle at 60 bar. Exit pressure is 10.9× ambient, so the plume
+goes on expanding outside through a Prandtl–Meyer fan, over-shoots, and recompresses into a
+long train of shock diamonds.
+
+![Under-expanded nozzle with a train of shock diamonds](docs/img/underexpanded.png)
+
+Six presets set nozzle, chamber, atmosphere **and gas** together, because those choices are
+not independent: *Sea-level booster*, *Vacuum upper stage*, *Over-expanded*,
+*Under-expanded*, *Supersonic flight*, *Cold gas thruster*.
+
+---
+
+## Flying it
+
+Set an ambient air speed and the vehicle is in flight. The nose cone then matters, and the
+base becomes a real interaction between the external flow and the plume.
+
+All three at Mach 2 at about 10 km, everything else identical:
+
+**Flat** — a detached bow shock stands off the face with a subsonic pocket behind it. The
+cheapest way to see a bow shock and the worst way to fly.
+
+![Flat nose at Mach 2 with a detached bow shock](docs/img/nose-flat.png)
+
+**Pointy** — the shock attaches at the tip and lies along the cone.
+
+![Pointy nose at Mach 2 with an attached oblique shock](docs/img/nose-pointy.png)
+
+**Rounded** — ellipsoidal, zero slope at the shoulder: the low-drag compromise most real
+vehicles fly.
+
+![Rounded nose at Mach 2](docs/img/nose-rounded.png)
+
+In all three, look aft as well: the external flow separates off the base annulus, and the
+plume acts as an aerodynamic body that the freestream has to go around.
+
+---
+
+## Fields
+
+Eight ways to look at the same instant. Switching is instant and does not disturb the run.
 
 | | |
 |---|---|
-| **Injector** | A band of cells at the head of the chamber pinned to a stagnation pressure and temperature, ramped in over an ignition rise time. The flux kernels treat it as ordinary fluid, so the nozzle **chokes on its own** rather than being told what mass flow to pass. |
-| **Chamber** | Radius and length. Gas dynamics only. |
-| **Nozzle** | Throat radius, exit radius, converging length, diverging length, and a **conical or bell** divergent contour. The contraction is a raised cosine so it meets both the chamber wall and the throat with zero slope. |
-| **Nose cone** | Flat (blunt cylinder), pointy (conical), or rounded (ellipsoidal, zero slope at the shoulder). |
-| **Environment** | Ambient **pressure** on a log slider from 0.01 to 125 kPa — sea level to about 65 km — ambient temperature, and ambient **air speed**, which is flight speed: in the vehicle frame it enters at the nose and washes down the body into the base region. |
+| **Mach** — the sonic line in the throat and where the plume goes supersonic. White contour at M = 1. ![](docs/img/field-mach.png) | **Schlieren** — shocks. Bow shocks, lip shocks, diamonds, Mach discs. ![](docs/img/field-schlieren.png) |
+| **Temperature** — chamber heat, plume cooling, recovery temperature on the nose. ![](docs/img/field-temperature.png) | **Exhaust fraction** — where the propellant goes and how much ambient air is entrained. ![](docs/img/field-exhaust.png) |
 
-The vehicle's outer radius is `max(chamber, nozzle exit) + wall thickness`, so the base is
-always an annulus and there is always a base-flow region for the plume and the external flow
-to fight over.
-
-## What it does not model
-
-Combustion, mixing, injector elements, multiple species, chemistry of any kind, radiation,
-ablation, film cooling, nozzle flexure. The chamber is simply *held* at a stagnation state.
-
-**One gas fills the whole domain.** γ and R are sliders, but they apply to the exhaust and to
-the atmosphere alike. The defaults are γ = 1.2 and R = 350 J/kg·K — roughly kerolox exhaust —
-which makes the engine right and the atmosphere wrong. [The cost of one
-gas](#the-cost-of-one-gas) works out exactly how wrong, and when to switch back to air.
-
-Axial symmetry forbids the three-dimensional instabilities that break a real shear layer up,
-so the Smagorinsky term stands in for them. It is a stand-in, not a substitute.
+Also available: speed |u|, pressure relative to ambient, axial velocity (for spotting
+recirculation and reversed flow), and vorticity (for shear layers). Every field is drawn with
+a labelled legend giving the quantity, its units and the numeric range actually used that
+frame.
 
 ---
 
-## The solver
+## The numbers
 
-Conserved state `U = (ρ, ρu_z, ρu_r, E)` as cell averages on a finite-volume grid in
-cylindrical coordinates.
+Two blocks, deliberately separated, and a time-series plot of axial velocity at the
+measurement plane.
 
-- **HLLC** approximate Riemann solver, **MUSCL** reconstruction with a minmod limiter,
-  **SSP-RK2** in time. First order at discontinuities, second elsewhere.
-- **Thornber's low-Mach reconstruction fix.** Plain upwinding has dissipation that grows
-  like 1/M. That matters more here than it did upstream: the external flow over the nose runs
-  at Mach 0.2 while the plume next door is at Mach 4, in the same grid, and without the fix
-  the slow side is dissipated away.
-- **Reflecting-wall Riemann fluxes** rather than ghost cells — robust across the sharp
-  throat and the nozzle lip.
-- **Plenum boundary** at the injector: a Dirichlet region that participates normally in the
-  flux computation. This is the standard reservoir boundary, and it is why the choking result
-  below is a prediction rather than an input.
-- **Freestream inlet** at z = 0 imposing (ρ, u_z, p) from the ambient sliders; zero-gradient
-  outflow and far field; a sponge layer relaxing to the freestream at all three open
-  boundaries so outgoing acoustics do not ring.
-- Viscous stress, viscous heating and conduction at constant Prandtl number, plus optional
-  Smagorinsky sub-grid viscosity.
-- Timestep from a GPU max-reduction of the acoustic wave speed `(|u| + a)/dz + (|u| + a)/dr`.
+<img src="docs/img/panel-numbers.png" alt="The metrics panel" width="380">
 
-Six compute dispatches per step (two RK stages × flux-z, flux-r, update), the whole frame
-built into one command encoder and submitted once, per-stage uniforms addressed by dynamic
-offset.
+**Nozzle — 1-D ideal** is classical isentropic theory: expansion ratio, exit Mach from the
+area–Mach relation, exit pressure, temperature and velocity, choked mass flow, thrust, thrust
+coefficient, c\*, Isp, and the expansion ratio that would be *optimum* at the current ambient
+pressure. These are exact for what they assume — no separation, no boundary layer, a uniform
+exit — and they update as you drag.
 
----
+**Environment** is what the atmosphere sliders actually mean in density, sound speed and
+freestream Mach.
 
-## What it predicts, and how well
+**Measured** is what the grid did: on-axis and peak axial velocity, peak Mach at the plane and
+anywhere in the field, and two mass flows.
 
-Default configuration: 25 mm chamber, 8 mm throat, 15.25 mm exit (ε = 3.63), bell contour,
-20 bar and 3000 K of γ = 1.2 / R = 350 gas, at 100 kPa ambient, still air. That exit radius is
-the optimum for this pressure ratio, so the default is a matched nozzle: exit pressure comes
-out at 1.00× ambient. Measured at the nozzle exit plane at t = 1.2 ms, by which point the flow
-is steady.
+Those two mass flows matter. `propellant flow` is weighted by the exhaust tracer and is the
+one to compare against the choked-throat figure; `all gas across` is everything crossing the
+plane, propellant and entrained air alike. When they diverge, the nozzle is entraining
+ambient air — which is the signature of a separated or badly expanded jet. `momentum + Δp` is
+the exit-plane momentum-plus-pressure integral over the nozzle exit area, which at the exit
+plane is the thrust.
 
-### It chokes, and the mass flow saturates
+### Warnings
 
-Sweeping chamber pressure at fixed geometry, against
-`ṁ = p_c·A_t·√(γ/RT₀)·(2/(γ+1))^((γ+1)/2(γ−1))`:
+The panel argues with you when the configuration deserves it — an unchoked nozzle, separation
+past the Summerfield criterion, over- or under-expansion, a conical half-angle steep enough to
+cost real momentum, an under-resolved throat, a transonic freestream making the base region a
+genuine interaction. Warnings that invalidate the numbers appear *above* them.
 
-| p_c / p_ambient | ideal ṁ | measured propellant ṁ | ratio | *all* gas crossing the plane |
-|---|---|---|---|---|
-| 3 | 38.2 g/s | 24.9 g/s | 0.65 | 92.6 g/s |
-| 5 | 63.6 g/s | 59.8 g/s | 0.94 | 91.7 g/s |
-| 10 | 127.3 g/s | 127.9 g/s | **1.01** | 139.6 g/s |
-| 20 | 254.5 g/s | 236.7 g/s | **0.93** | 244.6 g/s |
-
-Above about 10:1 the measured flow tracks the choked-throat formula to within a few percent
-and scales linearly with chamber pressure, which is the signature of a choked throat: the
-nozzle has stopped listening to the ambient.
-
-The first row is **not** a solver error, and reading it as one is the trap. At ε = 3.63 the
-nozzle needs roughly 20:1 to flow full. At 3:1 it is grossly over-expanded, a shock system
-sits inside the divergent section, the jet separates from the wall and recirculates — so the
-*exit plane* is simply the wrong place to measure the *throat's* mass flow. Look at the last
-column: at 3:1 nearly four times more gas crosses the exit plane than the throat passes,
-because most of it is ambient air being entrained and dragged through. That is why the panel
-reports the tracer-weighted propellant flux and the total separately. The two diverging *is*
-the diagnostic.
-
-### It converges
-
-Same case at three radial resolutions:
-
-| radial cells | cells across throat R | grid | ṁ vs ideal | exit-plane thrust | on-axis u_z | wall time for 1.2 ms |
-|---|---|---|---|---|---|---|
-| 64 | 7.3 | 257 × 64 | 83 % | 417 N | 2336 m/s | 0.7 s |
-| 112 (default) | 12.8 | 450 × 112 | 93 % | 480 N | 2356 m/s | 2.2 s |
-| 176 | 20.1 | 708 × 176 | 95 % | 484 N | 2390 m/s | 10.7 s |
-
-Monotone, and converged to a couple of percent by the default. This is worth stating plainly
-because **the upstream Airzooka case did not converge** — its answer wandered by a factor of
-two between resolutions, because the physics that mattered there was a chaotic shear layer
-off a sharp orifice lip. Here the flow is dominated by a smooth accelerating nozzle, which is
-a far better-posed problem. The plume's shock-cell structure downstream is still
-resolution-sensitive; the throat and the exit plane are not.
-
-The number that actually controls this is **cells across the throat radius**, not the total
-cell count, and the panel shows it live and warns below six.
-
-### It loses what a real nozzle loses
-
-At the default, measured exit-plane momentum-plus-pressure is 85 % of 1-D ideal thrust
-(566 N ideal, 480 N measured). The missing 15 % is boundary layer, non-uniform exit profile
-and the finite-rate startup — all things 1-D theory assumes away. Do not quote the absolute
-number; a real nozzle of this size would also have wall heat transfer and real-gas effects.
-
-### Inherited solver validation
-
-These were measured on the upstream build of the same kernels and carry over unchanged:
-
-- **Sod shock tube** against the exact Riemann solution, 601 cells: 0.17 % / 0.18 % / 0.09 %
-  L1 error in density, velocity and pressure, with zero overshoot at every resolution
-  tested. Grid convergence 0.88 and 0.80 in L1 — first order, which is correct for a solution
-  containing discontinuities.
-- **Speed of sound**: a 1 % Gaussian pressure pulse propagated at 344 m/s against a
-  theoretical 343.1 — 0.26 % error, with total mass drifting by 4 × 10⁻⁴ %.
-- **Choking through a sharp orifice**: mass flow plateaus above the critical pressure ratio
-  at 87 % of ideal, which is the discharge coefficient of a sharp-edged short tube — a real
-  vena-contracta effect. The smooth cosine contraction used here has no such contraction,
-  which is why its coefficient sits near 1.0 rather than 0.87.
-
+<img src="docs/img/panel-warnings.png" alt="Warning panel for a badly over-expanded nozzle" width="360">
 
 ---
 
 ## The cost of one gas
 
-The defaults are γ = 1.2 and R = 350 J/kg·K, roughly kerolox exhaust. Since the solver carries
-no species, that gas is also the atmosphere. This is the model's largest deliberate
-approximation, so here is exactly what it costs, and why the default sits where it does.
+The defaults are γ = 1.2 and R = 350 J/kg·K, roughly kerolox exhaust. The solver carries no
+species, so that gas is also the atmosphere. This is the model's largest deliberate
+approximation, so here is exactly what it costs and why the default sits where it does.
 
 ### What the atmosphere loses
 
@@ -182,8 +185,8 @@ At 101.325 kPa and 288.15 K:
 
 Density is the one that matters: 18 % low means dynamic pressure ½ρV², and every aerodynamic
 force with it, is 18 % low. The sound speed is nearly right by luck — γR is 402 for air and
-420 here, and the square root halves the difference — so the freestream Mach number for a
-given flight speed is only about 2 % off.
+420 here, and the square root halves the difference — so freestream Mach for a given flight
+speed is only about 2 % off.
 
 Across a normal shock at Mach 2:
 
@@ -218,13 +221,13 @@ expanded to its own optimum for 100 kPa:
 | enthalpy ceiling √(2c_p T_c) | 2455 m/s | 3550 m/s | **+45 %** |
 | optimum ε at 100 kPa | 2.90 | 3.63 | +25 % |
 | exit velocity | 1862 m/s | 2225 m/s | +19 % |
-| c* | 1355 m/s | 1580 m/s | +17 % |
+| c\* | 1355 m/s | 1580 m/s | +17 % |
 | Isp | 190 s | 227 s | **+19 %** |
 | mass flow | 296.7 g/s | 254.5 g/s | −14 % |
 | **thrust** | **552 N** | **566 N** | **+2.5 %** |
 
 That last row is the whole argument. **Thrust barely notices** — C_F is a weak function of γ,
-and the drop in mass flow almost exactly cancels the rise in exit velocity. But **Isp, c*,
+and the drop in mass flow almost exactly cancels the rise in exit velocity. But **Isp, c\*,
 exit velocity and the optimum expansion ratio all move by 15–25 %**, and the enthalpy ceiling
 by nearly half. Getting the exhaust wrong corrupts every performance number and resizes the
 nozzle; getting the ambient wrong costs 18 % on density and a fifth on recovery temperature.
@@ -236,7 +239,8 @@ The exhaust is the more expensive end to get wrong. That is why the default sits
 Set **γ = 1.4, R = 287** whenever the question is about the outside of the vehicle — bow shock
 shape, nose-cone comparison, drag, aeroheating — and read the engine block as nonsense while
 you do. The **Cold gas thruster** preset does this legitimately rather than as a compromise:
-cold nitrogen really is a γ = 1.4 gas, so that one preset has both ends right at once.
+cold nitrogen really is a γ = 1.4 gas, so that one preset has both ends right at once. Its Isp
+of 69 s is correct — real cold-gas thrusters land at 60–80 s.
 
 You can also buy back ambient density by lowering the ambient temperature — 236 K instead of
 288 K at 100 kPa restores ρ = 1.225 kg/m³ — but the sound speed then reads 7 % low. Two knobs,
@@ -256,64 +260,107 @@ across it: at equal pressure and temperature, exhaust is roughly 1.2× less dens
 because its R is larger. With no species there is no such jump, and the density ratio across
 the plume edge comes from temperature alone. Shear-layer growth, entrainment and the
 plume-to-freestream momentum ratio are therefore off by something like 20 %, and **no choice of
-γ and R fixes it** — the two gases would need different values at the same instant. That is a
-second species and a variable-γ Riemann solver, which is a different solver, not a setting.
+γ and R fixes it** — the two gases would need different values at the same instant. That needs
+a second species and a variable-γ Riemann solver.
 
 ---
 
-## Using it
+## How it works
 
-**Enter** re-ignites, **space** pauses. `↻` marks parameters that rebuild the grid.
+Conserved state `U = (ρ, ρu_z, ρu_r, E)` as cell averages on a finite-volume grid in
+cylindrical coordinates, so the slice knows it is a slice: the `1/r` terms are carried through
+and the axis needs no special case.
 
-The panel carries two blocks of numbers, deliberately separated:
+- **HLLC** approximate Riemann solver, **MUSCL** reconstruction with a minmod limiter,
+  **SSP-RK2** in time.
+- **Thornber's low-Mach reconstruction fix.** Upwind dissipation grows like 1/M, and this
+  problem has external flow at Mach 0.2 sitting beside a plume at Mach 4 on the same grid.
+  Without the fix the slow side dissolves.
+- **Reflecting-wall Riemann fluxes** rather than ghost cells — robust across the sharp throat
+  and the nozzle lip.
+- **Plenum boundary** at the injector: a Dirichlet region that takes part normally in the flux
+  computation, which is the standard reservoir boundary.
+- **Freestream inlet** imposing (ρ, u_z, p) from the ambient sliders; zero-gradient outflow and
+  far field; a sponge relaxing to the freestream at all three open boundaries so outgoing
+  acoustics do not ring back in.
+- Viscous stress, viscous heating and conduction at constant Prandtl number, plus optional
+  Smagorinsky sub-grid viscosity — a stand-in for the three-dimensional mixing that axial
+  symmetry forbids, not a substitute for it.
+- Timestep from a GPU max-reduction of the acoustic wave speed.
 
-- **1-D ideal** — expansion ratio, exit Mach from the area–Mach relation, exit pressure and
-  temperature, exit velocity, choked mass flow, thrust, C_F, c*, Isp, and the expansion ratio
-  that would be *optimum* at the current ambient pressure. These are exact for what they
-  assume: no separation, no boundary layer, uniform exit.
-- **Measured** — what the grid actually did at the measurement plane.
+Six compute dispatches per step (two RK stages × flux-z, flux-r, update). The whole frame is
+planned on the CPU and submitted in **one command encoder**, with per-stage uniforms addressed
+by dynamic offset — a dispatch costs a few microseconds and a submit costs far more.
 
-Warnings fire on the things that matter: not choked, over-expanded past the Summerfield
-separation criterion, under-expanded, a conical half-angle steep enough to cost real
-momentum, an under-resolved throat, and a transonic freestream making the base region a
-genuine interaction.
+### Not modelled
 
-### Fields
+Combustion, mixing, injector elements, multiple species, chemistry of any kind, radiation,
+ablation, film cooling, nozzle flexure. The chamber is simply *held* at a stagnation state.
 
-| field | what to look at it for |
-|---|---|
-| exhaust fraction | where the propellant goes, and how much ambient air is entrained |
-| speed \|u\| | the plume core |
-| **Mach** | the sonic line in the throat, and where the plume goes supersonic |
-| **schlieren** | shocks: bow shock, lip shocks, shock diamonds, Mach discs |
-| pressure − ambient | over- and under-expansion, base pressure |
-| temperature | recovery temperature on the nose, plume cooling |
-| axial velocity u_z | recirculation and reversed flow |
-| vorticity | shear layers — plume/freestream and the base region |
+---
 
-### Presets
+## How well it works
 
-Each one sets nozzle, chamber, atmosphere *and gas* together, because the point is that a
-nozzle is only ever right for one altitude. **Sea-level booster** (ε = 3.6, matched, Isp 227 s)
-and **Vacuum upper stage** (ε = 40, Isp 300 s) are both well designed — the vacuum one reads as
-under-expanded because in a true vacuum the optimum expansion ratio is infinite, so every real
-vacuum nozzle is under-expanded and truncated to save mass; **Over-expanded** is that same
-vacuum bell fired at sea level and shows the separation and the shock system moving inside the
-nozzle; **Under-expanded** is a stubby
-nozzle at 60 bar and gives a clean train of shock diamonds; **Supersonic flight** puts a
-pointy nose at Mach 2 at 10 km, where the bow shock, the shoulder expansion and the base
-flow all show up together; **Cold gas thruster** removes combustion entirely and switches the
-gas back to nitrogen (γ = 1.4, R = 297), which is the one preset where the atmosphere is also
-approximately right. Its Isp of 69 s is correct: real cold-gas thrusters land at 60–80 s.
+Default configuration: 25 mm chamber, 8 mm throat, 15.25 mm exit (ε = 3.63), bell contour,
+20 bar and 3000 K, at 100 kPa ambient in still air. Measured at the nozzle exit plane at
+t = 1.2 ms, by which point the flow is steady.
 
-### Things worth trying
+### It chokes, and the mass flow saturates
 
-- Switch the nose to **flat** at Mach 2 and watch a detached bow shock stand off the face,
-  with a subsonic pocket behind it. Then switch to **pointy** and watch it attach.
-- Take the vacuum nozzle down to sea level and watch the shock system walk *into* the bell.
-- Set γ back to 1.4 and R to 287 and watch the bow shock move *away* from the nose, and the
-  Isp fall by a fifth. Both are real consequences of the same knob — see below.
-- Move the measurement plane downstream and watch the thrust integral stop meaning thrust.
+Sweeping chamber pressure at fixed geometry, against
+`ṁ = p_c·A_t·√(γ/RT₀)·(2/(γ+1))^((γ+1)/2(γ−1))`:
+
+| p_c / p_ambient | ideal ṁ | measured propellant ṁ | ratio | *all* gas crossing the plane |
+|---|---|---|---|---|
+| 3 | 38.2 g/s | 24.9 g/s | 0.65 | 92.6 g/s |
+| 5 | 63.6 g/s | 59.8 g/s | 0.94 | 91.7 g/s |
+| 10 | 127.3 g/s | 127.9 g/s | **1.01** | 139.6 g/s |
+| 20 | 254.5 g/s | 236.7 g/s | **0.93** | 244.6 g/s |
+
+Above about 10:1 the measured flow tracks the choked-throat formula to within a few percent
+and scales linearly with chamber pressure — the throat has stopped listening to the ambient.
+Nothing in the setup imposes this; it falls out of a plenum boundary and a Riemann solver.
+
+The first row is **not** a solver error, and reading it as one is the trap. At ε = 3.63 the
+nozzle needs roughly 20:1 to flow full. At 3:1 it is grossly over-expanded, the jet separates
+and recirculates, and the exit plane is simply the wrong place to measure the throat's mass
+flow. Look at the last column: nearly four times more gas crosses the exit plane than the
+throat passes, because most of it is entrained ambient air. The two columns diverging *is* the
+diagnostic.
+
+### It converges
+
+Same case at three radial resolutions:
+
+| radial cells | cells across throat R | grid | ṁ vs ideal | exit-plane thrust | on-axis u_z | solver time for 1.2 ms |
+|---|---|---|---|---|---|---|
+| 64 | 7.3 | 257 × 64 | 83 % | 417 N | 2336 m/s | 0.7 s |
+| 112 (default) | 12.8 | 450 × 112 | 93 % | 480 N | 2356 m/s | 2.2 s |
+| 176 | 20.1 | 708 × 176 | 95 % | 484 N | 2390 m/s | 10.7 s |
+
+Monotone, and converged to a couple of percent by the default. The controlling number is
+**cells across the throat radius**, not the total cell count — the panel shows it live and
+warns below six. Plume shock-cell structure further downstream is still resolution-sensitive;
+the throat and the exit plane are not.
+
+### It loses what a real nozzle loses
+
+At the default, measured exit-plane momentum-plus-pressure is 85 % of 1-D ideal thrust (566 N
+ideal, 480 N measured). The missing 15 % is boundary layer, non-uniform exit profile and the
+finite-rate startup — all things 1-D theory assumes away.
+
+### Solver validation
+
+- **Sod shock tube** against the exact Riemann solution, 601 cells: 0.17 % / 0.18 % / 0.09 %
+  L1 error in density, velocity and pressure, with zero overshoot at every resolution tested.
+  Grid convergence 0.88 and 0.80 in L1 — first order, which is correct for a solution
+  containing discontinuities.
+- **Speed of sound**: a 1 % Gaussian pressure pulse propagated at 344 m/s against a
+  theoretical 343.1 — 0.26 % error, with total mass drifting by 4 × 10⁻⁴ %.
+- **Choking through a sharp orifice**: mass flow plateaus above the critical pressure ratio at
+  87 % of ideal, the discharge coefficient of a sharp-edged short tube — a real
+  vena-contracta effect. The smooth cosine contraction used here has no vena contracta, which
+  is why its coefficient sits near 1.0.
 
 ---
 
@@ -321,33 +368,31 @@ approximately right. Its Isp of 69 s is correct: real cold-gas thrusters land at
 
 Exports MP4/H.264 by default, or WebM/VP9 or VP8. WebCodecs supplies encoded chunks but no
 container, so both muxers are written here — a minimal Matroska writer and a minimal MP4
-writer (ftyp / mdat / moov).
+writer.
 
-The interactive solver chooses its timestep adaptively, which is right on screen and wrong
-for video: frames would represent unequal slices of time and the motion would be subtly,
-invisibly wrong. **Export runs on a fixed schedule** — every video frame advances exactly the
-same simulated interval, subdivided into as many equal sub-steps as stability requires. The
+The interactive solver chooses its timestep adaptively, which is right on screen and wrong for
+video: frames would represent unequal slices of time and the motion would be subtly, invisibly
+wrong. **Export runs on a fixed schedule** — every video frame advances exactly the same
+simulated interval, subdivided into as many equal sub-steps as stability requires. The
 sub-step count varies between frames; the frame interval never does.
 
 **Export all fields** writes one file per field from a *single* simulation. Stepping is the
 expensive part and rendering is nearly free, so eight fields cost far less than eight runs.
 
 **The colour scale is fixed for the whole clip.** On screen the range tracks the flow, which
-is what you want while exploring; in a video it means a colour does not signify the same
-thing from one frame to the next. Export therefore runs the shot once to find the peak, fixes
-the range, then records — and caches the peak per configuration so a repeat export skips it.
+is what you want while exploring; in a video it means a colour does not signify the same thing
+from one frame to the next. Export runs the shot once to find the peak, fixes the range, then
+records — and caches the peak per configuration so a repeat export skips the scan.
 
-Frames carry a burned-in clock, the configuration, the colour legend and a physical scale
-bar, in bands above and below the image rather than on top of the flow.
-
----
+Frames carry a burned-in clock, the configuration, the colour legend and a physical scale bar,
+in bands above and below the image rather than on top of the flow.
 
 ## Shareable links
 
 Every physical setting is serialised into the URL fragment, so a link reproduces a
 configuration exactly. Only non-defaults are written and the keys are two characters, so a
-typical link carries a handful of them; with all 35 parameters off their defaults it comes to
-269 characters, against a commonly-cited safe limit of 2000.
+typical link carries a handful; with all 35 parameters off their defaults it comes to 269
+characters.
 
 The fragment is used rather than the query string because it never reaches a server, and
 because assigning `location.hash` works on `file://` URLs where Chrome throws on
@@ -363,40 +408,39 @@ Back and forward restore the configuration *and* restart the run — otherwise y
 watching one nozzle's flow inside another nozzle's geometry. Dragging a slider replaces the
 current history entry; a discrete action pushes one.
 
----
-
 ## Performance
 
-Measured on an Apple M1. The default 450 × 112 grid runs about **0.46 ms of flight per second
-of wall clock**, so the roughly 1.2 ms it takes to reach steady state arrives in a few
-seconds. Cost is close to linear in the radial cell count rather than quadratic: the timestep
-is set by the cell size, so a finer grid pays twice, once in cells and once in steps.
+On an Apple M1, the default 450 × 112 grid paces itself to **122 solver steps per frame at
+28 ms, giving 36 fps and 0.37 ms of flight per second** — so the ~1.5 ms it takes to reach
+steady state arrives in about four seconds. Those are the numbers in the readout at the top of
+the screenshot above.
 
-The dominant lever is the **radial domain** slider, which trades far-field room against
-resolution at fixed cell count — widen it for a bow shock that needs space, narrow it to put
-cells where the throat is.
+Cost is close to linear in the radial cell count rather than quadratic: the timestep is set by
+the cell size, so a finer grid pays twice, once in cells and once in steps. The **radial
+domain** slider is the other main lever — it trades far-field room against resolution at fixed
+cell count, so widen it when a bow shock needs space and narrow it to put cells in the throat.
 
-Two structural choices from upstream still carry the performance:
-
-- **One command encoder per frame, one submit.** A WebGPU dispatch costs a few microseconds;
-  a submit costs far more. Every stage of every step of a frame is planned on the CPU first,
-  then queued together.
-- **Axial cell stretching.** The plume is long and thin and the timestep is set by the axial
-  wave speed, so axial cells can be about twice the radial size for free. Drop the stretch to
-  1 when shock-cell spacing is what you are measuring.
-
----
+Steps per frame are auto-paced to a frame-time budget, because the timestep varies by orders
+of magnitude across the parameter space and without pacing a small throat is a slideshow.
 
 ## What to trust
 
 **Structure.** Where the sonic line sits. Whether the flow separates inside the bell, and how
-far up it. Shock-diamond spacing and Mach discs in an under-expanded plume. Whether a bow
-shock is attached or detached. How the base flow and the plume interact. These are robust and
+far up. Shock-diamond spacing and Mach discs in an under-expanded plume. Whether a bow shock
+is attached or detached. How the base flow and the plume interact. These are robust and
 reproduce across resolutions.
 
 **The 1-D numbers.** Exact for what they assume, and clearly labelled as such.
 
-**Not the absolute measured figures.** They are converged to a few percent on the default
-grid for the throat and the exit plane, which is good enough to rank designs and not good
-enough to quote a thrust. And they are the thrust of a nozzle flowing hot air, not
-combustion products.
+**Not the absolute measured figures.** They are converged to a few percent on the default grid
+for the throat and the exit plane, which is good enough to rank designs and not good enough to
+quote a thrust — and they are the thrust of a nozzle flowing one idealised gas, not combustion
+products.
+
+---
+
+## Provenance
+
+Forked from [BenWheatley/Airzooka](https://github.com/BenWheatley/Airzooka). The compressible
+solver kernels, the WebGPU plumbing, the video exporter and the shareable-link machinery come
+from there.

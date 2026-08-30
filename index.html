@@ -629,11 +629,9 @@ const activeColourScale = () => (EXPORTING && EXP.scale) ? EXP.scale : colourSca
 /* ==========================================================================
    WebGPU device, the shared uniform block, and the max-reduction.
 
-   There is one solver here and it is a compute solver, so WebGPU is required
-   rather than preferred. The original Airzooka carried a WebGL2 fragment-shader
-   fallback for its incompressible solver; a density-based scheme with an HLLC
-   Riemann solver has no cheap fragment-shader form, and keeping a second solver
-   that answers a different question was worse than requiring a modern browser.
+   The solver is a compute solver, so WebGPU is required rather than preferred:
+   a density-based scheme with an HLLC Riemann solver has no cheap
+   fragment-shader form.
    ========================================================================== */
 
 const WG = { ok:false, dev:null, ctx:null, fmt:null, canvas:null };
@@ -1919,9 +1917,9 @@ const EXP = { running:false, cancel:false, scale:null, slots:null, sw:0, sh:0, r
 /* A WebGPU canvas does not present until a task boundary, so drawImage() straight after
    submit() yields a blank frame. Render into our own texture and copy it out instead:
    deterministic, and it works at any resolution without touching the visible canvas. */
-/* One field per frame used to mean one GPU round trip per field, and those serialise:
-   seven fields cost seven full stalls rather than seven cheap renders. Issue all the
-   renders and copies first, then wait on the maps together. */
+/* All the renders and copies are issued first and the maps awaited together. One round
+   trip per field would serialise: eight fields would cost eight full GPU stalls rather
+   than eight cheap renders. */
 function exportRenderSlot(k, w, h){
   const dev = WG.dev;
   if (!EXP.slots || EXP.sw !== w || EXP.sh !== h){
