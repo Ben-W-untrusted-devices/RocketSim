@@ -1,434 +1,297 @@
-# Airzooka flow sandbox
+# Rocket Sim
 
-An axisymmetric (r–z) incompressible flow simulator for the barrel in
-`OpenSCAD/airzooker.scad`, running entirely in WebGL2. Open `index.html` in a
-browser — no build step, no server needed.
+An axisymmetric (r–z) **compressible Navier–Stokes** sandbox for a rocket's aft end: a
+hot-gas injector feeding a combustion chamber, a parametric converging–diverging nozzle, and
+the outside of the vehicle sitting in a freestream you choose. It runs entirely in the
+browser on WebGPU — open `index.html`, no build step and no server needed.
 
-## Why axisymmetric rather than plain 2D
+Forked from [BenWheatley/Airzooka](https://github.com/BenWheatley/Airzooka), which asked the
+same kind of question about a 3D-printed air cannon. The compressible solver, the WebGPU
+plumbing, the video exporter and the shareable-link machinery are inherited from it; the
+geometry, the boundary conditions, the measurements and the physics being asked about are
+new.
 
-The device has circular rotational symmetry, so a slice through the axis is
-enough — but the *slice must know it is a slice*. A planar 2D solver produces a
-counter-rotating vortex **pair**, which propagates and decays quite differently
-from a vortex **ring**. This solver works in cylindrical coordinates with the
-`1/r` terms carried through the divergence, the pressure Laplacian and the
-viscous stress, so rings form, pinch off and travel with roughly the right
-dynamics.
+**WebGPU is required.** Airzooka carried a WebGL2 fragment-shader fallback for its
+*incompressible* solver. Nothing here is incompressible — the whole point is shocks, choking
+and expansion — and a density-based scheme with an HLLC Riemann solver has no cheap
+fragment-shader form. Rather than ship a second solver that answers a different question, the
+fallback was deleted. Chrome 113+, Edge 113+, Safari 26+ and Firefox 141+ on Windows all
+work; elsewhere Firefox may need `dom.webgpu.enabled`.
 
-## What the model says about the printed design
+---
 
-With the values in the `.scad` file — 25 mm bore, 100 mm barrel, **5 mm exit
-radius** — and an 80 mm stroke:
+## What it models
 
-| quantity | value |
-|---|---|
-| swept volume | 157 mL |
-| exit : bore area ratio | 25 : 1 |
-| ejected slug length | 2000 mm |
-| **slug L/D** | **200** |
-| mean exit speed at peak push | ~78 m/s (Mach 0.23) |
-
-A vortex ring rolls up from the shear layer at the orifice lip and **pinches off
-at L/D ≈ 4** (the "formation number" — Gharib, Rambod & Shariff 1998). Anything
-ejected after that cannot join the ring; it becomes a trailing jet, which mixes
-with still air and stalls within a few diameters. At L/D = 200 essentially the
-entire shot is trailing jet.
-
-Running it confirms this. At the same instant of flight:
-
-- **5 mm exit:** one long, thin, straight shear tube from the muzzle to the far
-  edge of the domain. No pinch-off, no ring, and a large recirculation *inside*
-  the barrel as air is dragged back around the piston.
-- **18.5 mm exit (L/D ≈ 4):** a compact, detached vortex ring that has separated
-  cleanly from its trailing shear layer and is propagating as a coherent blob.
-
-For a 25 mm bore and 80 mm stroke, the exit radius that lands on L/D = 4 is
+Along the axis, nose to tail:
 
 ```
-r_exit = cbrt(R_bore² · stroke / 8) = cbrt(25² · 80 / 8) ≈ 18.4 mm
+freestream in ──► nose cone ── forebody ── chamber ── converging ── throat ── diverging ──► plume
+                  flat /                   ▲
+                  pointy /                 │ injector plenum, held at
+                  rounded                  │ stagnation p and T
 ```
 
-i.e. roughly **three quarters of the bore diameter**, not a fifth of it. That is
-why commercial airzookas have a mouth almost as wide as the barrel. The sandbox
-recomputes this number live as "exit R for L/D=4" whenever you change the bore or
-the stroke.
-
-Two secondary effects worth playing with:
-
-- **Piston clearance.** The default 0.5 mm print tolerance opens ~4 % of the bore
-  area. Because the pressure behind a small orifice is high, a surprising amount
-  of the stroke escapes backwards instead of out of the muzzle.
-- **Exit speed.** 78 m/s is Mach 0.23 and rising fast as the orifice shrinks. Past
-  Mach 0.3 the incompressible solver is no longer valid, and a real printed nozzle
-  would start choking and dumping the energy into heat and noise.
-
-## Solver
-
-- Staggered MAC grid; `u_r` and `u_z` on their own faces, pressure and tracer at
-  cell centres. Faces are stored in one `(Nz+1)×(Nr+1)` RGBA32F texture.
-- Semi-Lagrangian advection with an RK2 backtrace, sampling each velocity
-  component at its own staggered location.
-- Pressure projection by Jacobi iteration on the cylindrical Poisson equation,
-  with `r`-weighted radial coefficients. The axis coefficient vanishes naturally
-  at `r = 0`, so the symmetry boundary needs no special case. Neumann at solids,
-  `p = 0` at the open boundaries.
-- Explicit viscous diffusion using the axisymmetric Laplacian, including the
-  `-u_r/r²` term.
-- Smagorinsky sub-grid viscosity, standing in for the turbulent mixing that
-  circular symmetry excludes.
-- Optional vorticity confinement to counteract numerical diffusion of ring cores.
-- Barrel, orifice plate, optional internal taper and the moving piston are
-  evaluated analytically per fragment rather than stored as a mask, so geometry
-  sliders are exact and free.
-- Adaptive timestep from a GPU max-reduction of `|u|`. Readbacks go through a
-  pixel-pack buffer and a fence — a synchronous `readPixels` cost ~10 ms of stall
-  per frame against a 0.15 ms solver step.
-
-### Accuracy notes
-
-Jacobi converges slowly and this problem is strongly constrained by the piston.
-A convergence check at 15 ms of flight (64 radial cells, 5 mm exit):
-
-| pressure iterations | peak &#124;u&#124; |
+| | |
 |---|---|
-| 40 | 72.6 m/s |
-| 160 | 82.8 m/s |
-| 640 | 84.9 m/s |
+| **Injector** | A band of cells at the head of the chamber pinned to a stagnation pressure and temperature, ramped in over an ignition rise time. The flux kernels treat it as ordinary fluid, so the nozzle **chokes on its own** rather than being told what mass flow to pass. |
+| **Chamber** | Radius and length. Gas dynamics only. |
+| **Nozzle** | Throat radius, exit radius, converging length, diverging length, and a **conical or bell** divergent contour. The contraction is a raised cosine so it meets both the chamber wall and the throat with zero slope. |
+| **Nose cone** | Flat (blunt cylinder), pointy (conical), or rounded (ellipsoidal, zero slope at the shoulder). |
+| **Environment** | Ambient **pressure** on a log slider from 0.01 to 125 kPa — sea level to about 65 km — ambient temperature, and ambient **air speed**, which is flight speed: in the vehicle frame it enters at the nose and washes down the body into the base region. |
 
-The default of 120 sits within a few percent of converged. Raise it if a result
-looks marginal.
+The vehicle's outer radius is `max(chamber, nozzle exit) + wall thickness`, so the base is
+always an annulus and there is always a base-flow region for the plume and the external flow
+to fight over.
 
-## Backends
+## What it does not model
 
-The simulator runs on **WebGPU compute** where it is available and falls back to the original
-**WebGL2 fragment-shader** path otherwise. The HUD names the live backend. Both produce
-**bit-identical** results: driven with the same timestep sequence for 500 steps, the two
-paths agreed to a maximum absolute difference of exactly 0.
+Combustion, mixing, injector elements, multiple species, chemistry of any kind, radiation,
+ablation, film cooling, nozzle flexure. The chamber is simply *held* at a stagnation state.
 
-## Performance
+**One gas fills the whole domain.** γ and R are sliders, but they apply to the exhaust and to
+the atmosphere alike. Air is γ = 1.4, R = 287; real rocket exhaust is nearer γ = 1.2,
+R = 350. Setting those makes the plume expand correctly and makes the "air" outside stop
+being air. Pick whichever end of the problem you are studying — and note that the default
+Isp figures are low for the same reason: they are the Isp of hot *air*, not of combustion
+products.
 
-The WebGL2 path is **render-pass bound, not pixel bound**, which is unintuitive and worth
-knowing. Measured on an Apple M1 through ANGLE's Metal backend:
+Axial symmetry forbids the three-dimensional instabilities that break a real shear layer up,
+so the Smagorinsky term stands in for them. It is a stand-in, not a substitute.
 
-| per pass | µs |
+---
+
+## The solver
+
+Conserved state `U = (ρ, ρu_z, ρu_r, E)` as cell averages on a finite-volume grid in
+cylindrical coordinates.
+
+- **HLLC** approximate Riemann solver, **MUSCL** reconstruction with a minmod limiter,
+  **SSP-RK2** in time. First order at discontinuities, second elsewhere.
+- **Thornber's low-Mach reconstruction fix.** Plain upwinding has dissipation that grows
+  like 1/M. That matters more here than it did upstream: the external flow over the nose runs
+  at Mach 0.2 while the plume next door is at Mach 4, in the same grid, and without the fix
+  the slow side is dissipated away.
+- **Reflecting-wall Riemann fluxes** rather than ghost cells — robust across the sharp
+  throat and the nozzle lip.
+- **Plenum boundary** at the injector: a Dirichlet region that participates normally in the
+  flux computation. This is the standard reservoir boundary, and it is why the choking result
+  below is a prediction rather than an input.
+- **Freestream inlet** at z = 0 imposing (ρ, u_z, p) from the ambient sliders; zero-gradient
+  outflow and far field; a sponge layer relaxing to the freestream at all three open
+  boundaries so outgoing acoustics do not ring.
+- Viscous stress, viscous heating and conduction at constant Prandtl number, plus optional
+  Smagorinsky sub-grid viscosity.
+- Timestep from a GPU max-reduction of the acoustic wave speed `(|u| + a)/dz + (|u| + a)/dr`.
+
+Six compute dispatches per step (two RK stages × flux-z, flux-r, update), the whole frame
+built into one command encoder and submitted once, per-stage uniforms addressed by dynamic
+offset.
+
+---
+
+## What it predicts, and how well
+
+Default configuration: 25 mm chamber, 8 mm throat, 13.5 mm exit (ε = 2.85), bell contour,
+20 bar and 3000 K, at 100 kPa ambient, still air. Measured at the nozzle exit plane at
+t = 1.2 ms, by which point the flow is steady.
+
+### It chokes, and the mass flow saturates
+
+Sweeping chamber pressure at fixed geometry, against
+`ṁ = p_c·A_t·√(γ/RT₀)·(2/(γ+1))^((γ+1)/2(γ−1))`:
+
+| p_c / p_ambient | ideal ṁ | measured ṁ | ratio |
+|---|---|---|---|
+| 3 | 44.5 g/s | 20.6 g/s | 0.46 |
+| 5 | 74.2 g/s | 63.6 g/s | 0.86 |
+| 10 | 148.4 g/s | 145.7 g/s | **0.98** |
+| 20 | 296.7 g/s | 286.3 g/s | **0.97** |
+
+Above about 10:1 the measured flow tracks the choked-throat formula to within 3 % and scales
+linearly with chamber pressure, which is the signature of a choked throat: the nozzle has
+stopped listening to the ambient.
+
+The two low rows are **not** a solver error, and reading them as one is the trap. At ε = 2.85
+the nozzle needs roughly 20:1 to flow full. At 3:1 it is grossly over-expanded, a shock
+system sits inside the divergent section, the jet separates from the wall and recirculates —
+so the *exit plane* is simply the wrong place to measure the *throat's* mass flow. The panel
+reports both the tracer-weighted propellant flux and the total gas crossing the plane, and
+the two diverge exactly when this is happening.
+
+### It converges
+
+Same case at three radial resolutions:
+
+| radial cells | cells across throat R | grid | ṁ vs ideal | exit-plane thrust | on-axis u_z | wall time for 1.2 ms |
+|---|---|---|---|---|---|---|
+| 64 | 7.3 | 257 × 64 | 84 % | 414 N | 1934 m/s | 0.6 s |
+| 112 (default) | 12.8 | 450 × 112 | 96 % | 477 N | 1938 m/s | 2.6 s |
+| 176 | 20.1 | 708 × 176 | 98 % | 479 N | 1896 m/s | 13 s |
+
+Monotone, and converged to a couple of percent by the default. This is worth stating plainly
+because **the upstream Airzooka case did not converge** — its answer wandered by a factor of
+two between resolutions, because the physics that mattered there was a chaotic shear layer
+off a sharp orifice lip. Here the flow is dominated by a smooth accelerating nozzle, which is
+a far better-posed problem. The plume's shock-cell structure downstream is still
+resolution-sensitive; the throat and the exit plane are not.
+
+The number that actually controls this is **cells across the throat radius**, not the total
+cell count, and the panel shows it live and warns below six.
+
+### It loses what a real nozzle loses
+
+At the default, measured exit-plane momentum-plus-pressure is 86–87 % of 1-D ideal thrust
+(552 N ideal, 477 N measured). The missing 13 % is boundary layer, non-uniform exit profile,
+and the finite-rate startup — all things 1-D theory assumes away. Do not quote the absolute
+number; a real nozzle of this size would also have wall heat transfer and a real gas.
+
+### Inherited solver validation
+
+These were measured on the upstream build of the same kernels and carry over unchanged:
+
+- **Sod shock tube** against the exact Riemann solution, 601 cells: 0.17 % / 0.18 % / 0.09 %
+  L1 error in density, velocity and pressure, with zero overshoot at every resolution
+  tested. Grid convergence 0.88 and 0.80 in L1 — first order, which is correct for a solution
+  containing discontinuities.
+- **Speed of sound**: a 1 % Gaussian pressure pulse propagated at 344 m/s against a
+  theoretical 343.1 — 0.26 % error, with total mass drifting by 4 × 10⁻⁴ %.
+- **Choking through a sharp orifice**: mass flow plateaus above the critical pressure ratio
+  at 87 % of ideal, which is the discharge coefficient of a sharp-edged short tube — a real
+  vena-contracta effect. The smooth cosine contraction used here has no such contraction,
+  which is why its coefficient is 0.97 rather than 0.87.
+
+---
+
+## Using it
+
+**Enter** re-ignites, **space** pauses. `↻` marks parameters that rebuild the grid.
+
+The panel carries two blocks of numbers, deliberately separated:
+
+- **1-D ideal** — expansion ratio, exit Mach from the area–Mach relation, exit pressure and
+  temperature, exit velocity, choked mass flow, thrust, C_F, c*, Isp, and the expansion ratio
+  that would be *optimum* at the current ambient pressure. These are exact for what they
+  assume: no separation, no boundary layer, uniform exit.
+- **Measured** — what the grid actually did at the measurement plane.
+
+Warnings fire on the things that matter: not choked, over-expanded past the Summerfield
+separation criterion, under-expanded, a conical half-angle steep enough to cost real
+momentum, an under-resolved throat, and a transonic freestream making the base region a
+genuine interaction.
+
+### Fields
+
+| field | what to look at it for |
 |---|---|
-| shading, same framebuffer | 3.8 |
-| + framebuffer switch | ~65 |
-| + texture rebind | ~93 |
+| exhaust fraction | where the propellant goes, and how much ambient air is entrained |
+| speed \|u\| | the plume core |
+| **Mach** | the sonic line in the throat, and where the plume goes supersonic |
+| **schlieren** | shocks: bow shock, lip shocks, shock diamonds, Mach discs |
+| pressure − ambient | over- and under-expansion, base pressure |
+| temperature | recovery temperature on the nose, plume cooling |
+| axial velocity u_z | recirculation and reversed flow |
+| vorticity | shear layers — plume/freestream and the base region |
 
-The switch cost is essentially independent of texture size and format — R32F, RGBA8 and a
-64×64 target all land within a factor of 1.5. So cost is **steps × (iterations + 6) × ~70 µs**,
-and the pixel count barely enters. Two consequences:
+### Presets
 
-- **Halving the resolution does not quarter the run time.** It only helps by allowing a larger
-  timestep, so the gain is roughly linear, not quadratic. This surprises people.
-- **Pressure iterations are the main dial**, since each one is a whole render pass.
+Each one sets nozzle, chamber and atmosphere *together*, because the point is that a nozzle
+is only ever right for one altitude. **Sea-level booster** and **Vacuum upper stage** are both
+well-designed; **Over-expanded** is the vacuum bell fired at sea level and shows the
+separation and the shock system moving inside the nozzle; **Under-expanded** is a stubby
+nozzle at 60 bar and gives a clean train of shock diamonds; **Supersonic flight** puts a
+pointy nose at Mach 2 at 10 km, where the bow shock, the shoulder expansion and the base
+flow all show up together; **Cold gas thruster** removes combustion entirely.
 
-A WebGPU **compute dispatch costs ~4 µs against that ~65 µs**, which is the entire reason for
-the second backend.
+### Things worth trying
 
-### What was worth doing
+- Switch the nose to **flat** at Mach 2 and watch a detached bow shock stand off the face,
+  with a subsonic pocket behind it. Then switch to **pointy** and watch it attach.
+- Take the vacuum nozzle down to sea level and watch the shock system walk *into* the bell.
+- Set γ = 1.2 and R = 350 and see how much further the plume expands.
+- Move the measurement plane downstream and watch the thrust integral stop meaning thrust.
 
-Common to both backends:
-
-- Solid-boundary enforcement folded into the `forces` and `proj` kernels, removing two passes
-  per step.
-- Fewer pressure iterations, paid for with a smaller CFL number. At 15 ms of flight,
-  `cfl 0.5 / 30 iterations` reads **83.6** m/s against `cfl 1.0 / 120 iterations` at **79.5** —
-  better *and* 36 % fewer passes.
-- **Axial cell stretching.** The jet is long and thin and the timestep is set by the axial
-  velocity, so axial cells can be ~2× the radial size: peak 42.6 → 43.0 m/s for 1.7× the speed.
-- A **directional CFL**, `dt = cfl / (u_z/dz + u_r/dr)`, without which stretching buys nothing.
-- Steps per frame **auto-paced** to a frame-time budget.
-
-WebGL2 only: `invalidateFramebuffer` before each pass, worth ~16 %.
-
-WebGPU only:
-
-- Every dispatch for every step of a frame goes into **one command encoder, submitted once**,
-  with per-step uniforms addressed by dynamic offset.
-- A `prepare` kernel folds geometry, boundary conditions and `1/den` into four coefficients
-  and a scaled right-hand side, once per step. The Jacobi inner loop then costs one `dot`
-  instead of five `solidAt` evaluations — **32.5 → 14.4 µs per iteration**.
-
-### A tiling optimisation that did not work
-
-The obvious WebGPU win looks like workgroup shared memory: load a tile plus halo, run several
-Jacobi iterations with barriers, write once, and cut dispatches fourfold. Built and measured,
-it was **1.69× slower** than the naive one-iteration-per-dispatch kernel (17.1 vs 10.1 µs per
-iteration).
-
-The reasoning was wrong because a dispatch costs only ~4 µs here, so there is nothing to
-amortise, while the halo makes each workgroup compute 2.25× the cells it keeps. The simple
-kernel is memory-bandwidth bound, which is the right place to be. It was deleted.
-
-### Where it ended up
-
-Simulating the as-printed 5 mm case:
-
-| | ms of flight per second | a 150 ms shot |
-|---|---|---|
-| original WebGL2 settings | 0.55 | 272 s |
-| tuned WebGL2, Balanced | 2.5 | 60 s |
-| **WebGPU, Balanced** | **16.0** | **9.4 s** |
-| **WebGPU, Draft** | **63.2** | **2.4 s** |
-| a ring design (18.5 mm exit) | faster than real time | instant |
-
-**29× on the default, 115× on Draft.** The small orifice remains the expensive case, because
-the timestep scales with `1/u_max` and `u_max` scales with `1/r_exit²`. Any design worth
-printing runs effectively instantly.
-
-Below about 30 pressure iterations the solve stops enforcing mass conservation and diverges
-outright; the slider is clamped there and a guard catches it.
-
-
-
-## Accuracy: what is *not* converged
-
-Worth being blunt about. Re-running the same case at 64, 112 and 160 radial cells:
-
-| radial cells | 5 mm exit, peak at target | 18.5 mm exit, peak at target |
-|---|---|---|
-| 64 | 93.7 m/s | 6.8 m/s |
-| 112 | 42.6 m/s | 5.4 m/s |
-| 160 | 104.6 m/s | 9.0 m/s |
-
-That is **not monotonic and not converged** — a factor of two, wandering. The shear layer off
-a sharp orifice lip is chaotic at these resolutions, and the result depends on where the grid
-happens to cut it.
-
-So: the **analytic** numbers (L/D, area ratio, exit speed, the optimal exit radius) are exact
-and are what the design conclusion rests on. The **structural** result — a clean detached ring
-versus a straight shear tube that never pinches off — is robust and reproduces at every
-resolution. The **measured velocities at the target plane are good to about a factor of two**
-and should only ever be used to rank designs, never quoted.
-
-## Colour legend
-
-Every field is drawn with a labelled legend in the corner of the viewport: the colour ramp,
-the quantity, its units and the numeric range. The scale is whatever the shader actually used
-that frame, including the colour-gain slider, so it never drifts from what is on screen.
-
-| field | units |
-|---|---|
-| tracer | fraction, 0–1 |
-| speed \|u\| | m/s |
-| vorticity ω_θ | 1/ms |
-| pressure | Pa relative to ambient (compressible) or m²/s² kinematic (incompressible) |
-| axial velocity u_z | m/s |
-| Mach number | dimensionless, with a white contour at M = 1 |
-| schlieren | relative \|∇ρ\| |
-
-The two pressure fields genuinely differ: the incompressible solver works at ρ = 1 and its
-pressure is kinematic, so labelling both "Pa" would have been wrong.
+---
 
 ## Video export
 
-Exports a WebM to disk. The interactive solver chooses its timestep adaptively, which is right
-on screen and wrong for video — frames would represent unequal slices of time and the motion
-would be subtly, invisibly wrong. **Export therefore runs on a fixed schedule: every video
-frame advances exactly the same simulated interval**, subdivided into as many equal sub-steps
-as stability requires. The sub-step count varies between frames; the frame interval never
-does. Verified: 30 exported frames, all frame intervals exactly 0.2000000 ms.
+Exports MP4/H.264 by default, or WebM/VP9 or VP8. WebCodecs supplies encoded chunks but no
+container, so both muxers are written here — a minimal Matroska writer and a minimal MP4
+writer (ftyp / mdat / moov).
 
-Formats: **MP4/H.264** by default (widest editor support), or WebM/VP9 and WebM/VP8.
-WebCodecs supplies encoded chunks but no container, so both muxers are written here — a
-minimal Matroska writer and a minimal MP4 writer (ftyp / mdat / moov).
+The interactive solver chooses its timestep adaptively, which is right on screen and wrong
+for video: frames would represent unequal slices of time and the motion would be subtly,
+invisibly wrong. **Export runs on a fixed schedule** — every video frame advances exactly the
+same simulated interval, subdivided into as many equal sub-steps as stability requires. The
+sub-step count varies between frames; the frame interval never does.
 
-**Export all fields** writes one file per field — `_tracer`, `_speed`, `_vorticity`,
-`_pressure`, `_velocity`, and on the compressible solver `_mach` and `_schlieren` too — from a
-**single simulation**. Stepping is the expensive part and rendering is nearly free, so the
-extra fields cost far less than re-running: measured over 80 frames, five fields took 7.6× a
-single field rather than the 5× a naive re-run would cost plus a second scan pass each. The
-peak found by the scan is also cached per configuration, so a repeat export skips it.
+**Export all fields** writes one file per field from a *single* simulation. Stepping is the
+expensive part and rendering is nearly free, so eight fields cost far less than eight runs.
 
 **The colour scale is fixed for the whole clip.** On screen the range tracks the flow, which
-is what you want while exploring; in a video it means a colour does not signify the same thing
-from one frame to the next, and the numbers under the legend visibly crawl. Export therefore
-runs the shot once first to find the peak, fixes the range from that, then records. It costs
-roughly double, and can be turned off — in which case the range is frozen at whatever the
-current frame shows, still constant but probably badly chosen.
+is what you want while exploring; in a video it means a colour does not signify the same
+thing from one frame to the next. Export therefore runs the shot once to find the peak, fixes
+the range, then records — and caches the peak per configuration so a repeat export skips it.
 
-Frames carry a burned-in clock, the configuration, the colour legend and a physical scale bar.
-These sit in bands **above and below** the image rather than on top of it, so nothing obscures
-the flow and no semi-transparent backing panel is needed — the earlier version drew a
-fixed-width panel that longer captions overflowed.
+Frames carry a burned-in clock, the configuration, the colour legend and a physical scale
+bar, in bands above and below the image rather than on top of the flow.
 
-Set flight time to record, flight time per frame, frame rate, width and bitrate; the panel
-shows the resulting frame count, video length and slow-motion factor. Export settings are
-deliberately **not** in the shareable link — they describe the recording, not the physics.
-
-Two implementation notes worth keeping:
-
-- **WebCodecs, not MediaRecorder.** `MediaRecorder` timestamps frames by wall clock, so a
-  simulation slower or faster than real time comes out stretched. `VideoEncoder` takes an
-  explicit timestamp per frame, which decouples the video's time base from how long the
-  computation took. WebCodecs emits encoded chunks and no container, so there is a small
-  Matroska/WebM muxer here: one video track, SimpleBlocks in Clusters.
-- **Rendering to an owned texture, not the canvas.** A WebGPU canvas does not present until a
-  task boundary, so `drawImage()` immediately after `submit()` returns a blank frame — the
-  first version of this exported 30 perfectly-timed black frames. Export renders into its own
-  texture and copies it out, which is deterministic and works at any resolution without
-  disturbing the visible canvas.
+---
 
 ## Shareable links
 
-Every setting is serialised into the URL fragment, so a link reproduces a configuration
-exactly. **Copy shareable link** puts it on the clipboard; the address bar updates live as you
-move sliders.
+Every physical setting is serialised into the URL fragment, so a link reproduces a
+configuration exactly. Only non-defaults are written and the keys are two characters, so a
+typical link carries a handful of them; with all 35 parameters off their defaults it comes to
+269 characters, against a commonly-cited safe limit of 2000.
 
-On length — it is not close to a problem:
+The fragment is used rather than the query string because it never reaches a server, and
+because assigning `location.hash` works on `file://` URLs where Chrome throws on
+`history.replaceState`.
 
-| | characters |
-|---|---|
-| worst case, all 27 settings non-default | 153 params, 186 full URL |
-| a typical tweak (`#er=18.5&tp=25&fd=2`) | 18 |
-| everything at defaults | 0 — no fragment at all |
+Links are validated on the way in — values clamped to their control's range, unknown keys and
+unparseable numbers ignored — so a hand-edited `#tr=99999&er=-50&rs=abc&nt=77` loads as a
+valid configuration rather than breaking. Round-tripping is tested: encoding a fully
+non-default configuration, resetting everything, then decoding restores all 35 settings with
+zero mismatches.
 
-Against a commonly-cited safe limit of 2000 characters that is 10× headroom, and Chrome's own
-limit is 32779. Three choices keep it that short:
+Back and forward restore the configuration *and* restart the run — otherwise you would be
+watching one nozzle's flow inside another nozzle's geometry. Dragging a slider replaces the
+current history entry; a discrete action pushes one.
 
-- **Only non-defaults are written.** Most links carry a handful of keys.
-- **Two-character keys** (`br`, `er`, `tp`, …).
-- **The fragment, not the query string.** The fragment is never sent to a server, so no
-  server request-line limit (Apache 8190, nginx 8192) applies at all — and assigning
-  `location.hash` works on `file://` URLs, where Chrome throws on `history.replaceState`.
+---
 
-Back and forward work properly: discrete actions (a preset, a model change, resetting to
-defaults) push a history entry, while dragging a slider replaces the current one so the
-history does not fill with intermediate values. Navigating restores the configuration **and
-restarts the shot** — otherwise you would be watching one geometry's flow inside another
-geometry's barrel.
+## Performance
 
-Links are validated on the way in: values are clamped to their slider range, unknown keys and
-unparseable numbers are ignored. A hand-edited `#br=99999&er=-50&rs=abc&md=77` loads as a
-valid configuration rather than breaking.
+Measured on an Apple M1. The default 450 × 112 grid runs about **0.46 ms of flight per second
+of wall clock**, so the roughly 1.2 ms it takes to reach steady state arrives in a few
+seconds. Cost is close to linear in the radial cell count rather than quadratic: the timestep
+is set by the cell size, so a finer grid pays twice, once in cells and once in steps.
 
-Round-tripping is tested: encoding a fully non-default configuration, resetting everything,
-then decoding restores all 27 settings with zero mismatches.
+The dominant lever is the **radial domain** slider, which trades far-field room against
+resolution at fixed cell count — widen it for a bow shock that needs space, narrow it to put
+cells where the throat is.
 
-## Two physical models
+Two structural choices from upstream still carry the performance:
 
-The sandbox carries **two solvers** and picks between them on the analytic exit Mach number.
-Neither is right everywhere, and pretending otherwise was the previous version's mistake.
+- **One command encoder per frame, one submit.** A WebGPU dispatch costs a few microseconds;
+  a submit costs far more. Every stage of every step of a frame is planned on the CPU first,
+  then queued together.
+- **Axial cell stretching.** The plume is long and thin and the timestep is set by the axial
+  wave speed, so axial cells can be about twice the radial size for free. Drop the stretch to
+  1 when shock-cell spacing is what you are measuring.
 
-| | incompressible | compressible |
-|---|---|---|
-| equations | constant density, pressure projection | Navier–Stokes, conserved (ρ, ρu, E) |
-| numerics | MAC grid, semi-Lagrangian, Jacobi Poisson | finite volume, HLLC + MUSCL, SSP-RK2 |
-| acoustics | none — infinite sound speed | resolved |
-| valid | below about Mach 0.3 | any speed |
-| speed at Mach 0.02 | 16 ms of flight per second | 2.8 |
+---
 
-Below Mach 0.3 the incompressible model is not a shortcut, it is the correct limit: density
-varies by under 5 %, and it is ~6× faster because it does not have to resolve sound waves the
-flow does not care about. Above Mach 0.3 it is not approximate but inapplicable. The
-compressible solver is right everywhere but pays a timestep set by the sound speed, so at
-Mach 0.02 it takes about 50× more steps than the flow itself needs.
+## What to trust
 
-**Auto** picks incompressible below Mach 0.25 and compressible above it. Both can be forced.
+**Structure.** Where the sonic line sits. Whether the flow separates inside the bell, and how
+far up it. Shock-diamond spacing and Mach discs in an under-expanded plume. Whether a bow
+shock is attached or detached. How the base flow and the plume interact. These are robust and
+reproduce across resolutions.
 
-## Compressible solver: validation
+**The 1-D numbers.** Exact for what they assume, and clearly labelled as such.
 
-Not "it runs" — checked against exact solutions.
-
-**Sod shock tube**, against the exact Riemann solution, 601 cells:
-
-| | L1 error |
-|---|---|
-| density | 0.17 % |
-| velocity | 0.18 % |
-| pressure | 0.09 % |
-
-with **zero overshoot** at every resolution tested, confirming the minmod limiter is TVD.
-Grid convergence in L1 was 0.88 and 0.80 over successive doublings — first order, which is the
-correct and expected rate for a solution containing discontinuities regardless of the scheme's
-formal second-order accuracy.
-
-**Speed of sound**: a 1 % Gaussian pressure pulse in still air propagated at **344 m/s**
-against a theoretical 343.1 m/s — 0.26 % error. Total mass drifted by 4×10⁻⁴ %. This is the
-quantity the incompressible model gets infinitely wrong.
-
-**Choking**, discharging a reservoir through the 5 mm orifice at rising pressure ratios:
-
-| p₀/p_amb | throat Mach | ṁ / (A·p₀) |
-|---|---|---|
-| 1.2 | 0.45 | 1.25e-3 |
-| 1.5 | 0.70 | 1.73e-3 |
-| 1.893 (critical) | 0.91 | 1.95e-3 |
-| 3 | 1.14 | **2.057e-3** |
-| 6 | 1.20 | **2.061e-3** |
-| 12 | 1.21 | **2.059e-3** |
-
-The mass flow **saturates** above the critical ratio — the flow chokes and stops responding to
-pressure. The plateau sits at 87 % of the ideal 2.361e-3, which is the discharge coefficient
-of a sharp-edged short-tube orifice: a real vena-contracta effect, not an error.
-
-**Low Mach**: the vortex ring still forms and propagates at Mach 0.02, confirming the
-Thornber low-Mach reconstruction fix is doing its job. Without it, upwind dissipation growing
-as 1/M would have dissolved the ring — the very thing the tool exists to study.
-
-## A correction to an earlier claim
-
-An earlier version of this file said a converging nozzle "cannot exceed 313 m/s". That
-conflated two different things and was too strong.
-
-- Sonic velocity caps the **throat**. That part is right, and the choking table above
-  demonstrates it.
-- The **free jet downstream** of an underexpanded orifice can and does go supersonic, through
-  a Prandtl–Meyer expansion at the lip. The real ceiling on the plume is `sqrt(2 cp T0)` at the
-  **stagnation** temperature — and T0 rises when the gas is compressed.
-
-Running the 250 mm/2 ms/12.5 mm-taper case properly shows why this matters. The compressible
-solver finds a peak barrel pressure of **33.3 bar**, which matches the isentropic compression
-ratio of that stroke (250/21)^1.4 = 32.6 almost exactly. That raises stagnation temperature to
-~777 K, whose thermodynamic ceiling is 1250 m/s. The solver reports a peak of **1200 m/s** —
-just under it, and therefore physical. The incompressible solver reported 2416 m/s, nearly
-twice the ceiling.
-
-So the 676 m/s reading was not impossible in principle; it needed a very large pressure ratio,
-and those settings do produce one. What makes the configuration unbuildable is the 33 bar: the
-piston would be pushing against about 6.5 kN, and the printed barrel would burst long first.
-
-## Compressibility: a hard limit for the incompressible model
-
-This solver is **incompressible by construction**. Density is constant, and the pressure
-Poisson solve propagates information across the whole domain instantaneously — an infinite
-speed of sound. It therefore has no acoustic waves, no shocks and no choking. Above roughly
-**Mach 0.3 it is not approximate, it is inapplicable**, and it will still hand you a
-confident-looking number.
-
-Reference points for air at 20 °C, none of them simulated:
-
-| | m/s |
-|---|---|
-| ambient speed of sound | 343 |
-| **sonic throat — hard ceiling for a converging nozzle** | **313** |
-| perfect de Laval nozzle expanding to vacuum | 767 |
-
-The 313 m/s figure is the one that matters. A tapered barrel is a *converging* nozzle, and a
-converging nozzle **cannot** produce supersonic flow at any driving pressure: it chokes at
-Mach 1 at the throat and the mass flow stops responding. Exceeding it requires a
-converging–diverging (de Laval) nozzle, and even a perfect one exhausting into vacuum caps at
-767 m/s. Any reading above ~313 m/s from a converging geometry is a modelling artefact.
-
-The constant-density assumption fails just as hard: real air is 0.63× stagnation density at
-Mach 1 and 0.23× at Mach 2, so the solver's mass flux is out by 1.6× and 4.3× respectively.
-
-### The guard
-
-Whenever the analytic exit speed or the measured peak exceeds Mach 0.3, the metrics panel
-puts a red banner **above** the numbers and strikes through the measured block. A separate
-check flags drive settings that are unbuildable regardless of the flow — for example a
-229 mm stroke in 2 ms needs the piston itself to reach 180 m/s (Mach 0.52) at about
-28,800 g, which nothing hand- or spring-driven will do.
-
-Making this regime *correct* would mean a different solver: compressible Euler or
-Navier–Stokes with a density field, an energy equation and a shock-capturing scheme. That is
-a rewrite, not a setting — and it is unnecessary for the actual design question, which lives
-comfortably below Mach 0.05.
-
-## Not modelled
-
-The flange, handle, greebles and screw holes, since they are outside the flow.
-The back of the barrel is treated as open so air can refill behind the piston.
-Compressibility, and any elastic-diaphragm drive.
+**Not the absolute measured figures.** They are converged to a few percent on the default
+grid for the throat and the exit plane, which is good enough to rank designs and not good
+enough to quote a thrust. And they are the thrust of a nozzle flowing hot air, not
+combustion products.
