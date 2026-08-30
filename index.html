@@ -214,7 +214,9 @@ const CONTROLS = [
           'freestream Mach number.' },
    { k:'vAmb',     t:'Ambient air speed',    min:0,  max:1500,step:5,    v:0,    unit:'m/s',
      hint:'Flight speed. In the vehicle frame this is atmosphere entering at the nose and ' +
-          'washing down the body into the base region, where it shears against the plume.' },
+          'washing down the body into the base region, where it shears against the plume. ' +
+          'With acceleration switched on this is the value the run starts from, not a value ' +
+          'it is held at.' },
    { k:'gammaA',   t:'Ambient γ',            min:1.1, max:1.7, step:0.01, v:1.4, rebuild:true,
      hint:'1.40 for air and for nitrogen; 1.29 for the CO₂ of Mars and Venus; about 1.43 for ' +
           'the hydrogen–helium of Jupiter.' },
@@ -223,6 +225,27 @@ const CONTROLS = [
      hint:'Logarithmic, because the range is enormous: 191 for CO₂, 287 for air, 3748 for ' +
           'Jupiter\u2019s hydrogen. This is what makes a Jovian atmosphere so hard to fly a ' +
           'rocket into and so easy to float a balloon in.' },
+ ]},
+ { group:'Vehicle & flight', open:true, items:[
+   { k:'accelerate', t:'Accelerate from the initial airspeed', kind:'check', v:0,
+     hint:'Off, the airspeed slider is a fixed boundary condition. On, it becomes a state: ' +
+          'the vehicle accelerates under thrust minus pressure drag, burns propellant, and ' +
+          'shuts down when the tanks are dry. Gravity and flight-path angle are not modelled, ' +
+          'so this is the axial force balance only.' },
+   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:3, step:0.01, v:0.3, log:true, unit:'kg',
+     hint:'Everything that is not propellant. Logarithmic, 0.1 kg to a tonne. Keep it ' +
+          'consistent with the vehicle you have drawn: the default body is 56 mm across and ' +
+          '250 mm long, which is a couple of kilograms of sounding rocket.' },
+   { k:'propMassLog', t:'Propellant mass', min:-1, max:3, step:0.01, v:0, log:true, unit:'kg',
+     hint:'Burn time follows from this and the mass flow, which the solver already measures, ' +
+          'so there is nothing to set for consumption rate.' },
+   { k:'tPerMs',   t:'Flight time per flow ms', min:-3, max:3, step:0.05, v:-1.7, log:true,
+     unit:'s/ms',
+     hint:'The flow settles in about 2 ms; a burn lasts seconds. The default is set so the ' +
+          'airspeed barely moves while the flow is settling, which is the quasi-steady regime ' +
+          'the coupling assumes — and it means a whole burn is far too slow to sit and watch. ' +
+          'Raise it to see the bow shock build as the vehicle accelerates, and believe the ' +
+          'warning when it says the flow has stopped keeping up.' },
  ]},
  { group:'Fluid', items:[
    { k:'visc',     t:'Kinematic viscosity',  min:0, max:1, step:0.0001, v:0.0151, unit:'mm²/ms',
@@ -288,21 +311,28 @@ const R_UNIVERSAL = 8314.462618;                 // J/(kmol K), so R = R_u / M w
 const molarMass = R => R_UNIVERSAL / R;
 
 /* The atmosphere. A different gas from the exhaust, which is the point. */
+const dryMass = () => Math.pow(10, P.dryMassLog);
+const propMass = () => Math.pow(10, P.propMassLog);
+const flightSpeed = () => P.accelerate ? S.vFlight : P.vAmb;
 function env(){
   const g = P.gammaA, Rg = Math.pow(10, P.RgasALog), pa = pAmbPa(), Ta = P.tAmb;
   const rhoA = pa / (Rg * Ta);
   const aA = Math.sqrt(g * Rg * Ta);
-  return { g, Rg, pa, Ta, rhoA, aA, vInf:P.vAmb, machInf:P.vAmb / aA };
+  const v = flightSpeed();
+  return { g, Rg, pa, Ta, rhoA, aA, vInf:v, machInf:v / aA };
 }
 /* The exhaust. Everything inside the nozzle is this gas. */
 const exhaust = () => ({ g:P.gammaE, Rg:P.RgasE, cv:P.RgasE / (P.gammaE - 1) });
 
 /* The chamber is a plenum held at stagnation conditions, ramped in over `riseMs` so the
    run does not begin with a discontinuity the size of the pressure ratio. */
+const smoothstep = x => { const c = Math.min(1, Math.max(0, x)); return c * c * (3 - 2 * c); };
 function chamberState(t){
   const E = env(), X = exhaust();
-  const s = P.riseMs <= 0 ? 1 : Math.min(1, Math.max(0, t / P.riseMs));
-  const sm = s * s * (3 - 2 * s);
+  let sm = smoothstep(P.riseMs <= 0 ? 1 : t / P.riseMs);
+  // Tanks dry: ramp the chamber back down over the same time the ignition took, rather than
+  // cutting it, which would launch an expansion wave as violent as the starting shock.
+  if (S.shutT >= 0) sm = Math.min(sm, 1 - smoothstep((t - S.shutT) / Math.max(P.riseMs, 1e-6)));
   const p = E.pa + (P.pcBar * 1e5 - E.pa) * sm;
   const T = E.Ta + (P.Tc - E.Ta) * sm;
   return { p, T, rho: p / (X.Rg * T) };            // the plenum holds exhaust, not atmosphere
@@ -405,11 +435,27 @@ function derived(){
 
   // density of the exhaust at the exit plane, against the atmosphere it is pushing into
   const rhoE = pe / (Rg * Te);
+
+  /* Trajectory numbers. Mass flow comes from the measured propellant flux when there is one,
+     because that is what actually empties the tanks; the ideal figure stands in before the
+     first readback. Nothing here needs a consumption-rate input. */
+  const m = S.meas;
+  const mdotUse = (m && m.mdot > 0) ? m.mdot : mdot;
+  const burnTime = mdotUse > 0 ? propMass() / mdotUse : Infinity;
+  const massFull = dryMass() + propMass();
+  const massNow = dryMass() + (P.accelerate ? S.propLeft : propMass());
+  const Fmeas = m ? m.thrust : thrust, Dmeas = m ? m.drag : 0;
+  const netF = Fmeas - Dmeas;
+  const accel = netF / Math.max(massNow, 1e-9);
+  const ispUse = mdotUse > 0 ? Fmeas / (mdotUse * G0) : 0;
+  // Tsiolkovsky on the measured exhaust velocity: propulsion only, no drag or gravity loss
+  const deltaV = ispUse * G0 * Math.log(massFull / Math.max(dryMass(), 1e-9));
   return { g, Rg, rt, re, At, Ae, eps, pc, Tc, pa:E.pa, choked, critical,
            Me, pe, Te, ve, peRatio, mdot, thrust, cf, isp, cstar,
            halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax, rhoE,
            Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
-           machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA };
+           machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
+           burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas };
 }
 
 
@@ -476,6 +522,7 @@ const S = {
   series:[], peak:0, peakT:-1,
   spfAuto:32, wallSmooth:16, simRate:0, diverged:false,
   colourScale:1, meas:null,
+  flightT:0, vFlight:0, propLeft:0, shutT:-1,      // trajectory state, in seconds and kg
 };
 var FIXED_DT = null, EXPORTING = false;
 
@@ -493,6 +540,7 @@ function buildGrid(){
 
 function resetSim(){
   S.t = 0; S.dt = 0.001;
+  S.flightT = 0; S.vFlight = P.vAmb; S.propLeft = propMass(); S.shutT = -1;
   S.series.length = 0; S.peak = 0; S.peakT = -1; S.vmax = 1; S.meas = null;
   S.diverged = false;
   const d = document.getElementById('diverged');
@@ -518,6 +566,12 @@ function probeIz(){
 function consumeProbeArr(buf, t){
   const pa = pAmbPa(), rLim = GEO.nozExitR;
   let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0, Taxis = 0, Yaxis = 0;
+  // the axial pressure force on the external surface, summed over the stations the GPU wrote
+  let drag = 0;
+  for (let iz = 0; iz < S.Nz; iz++){
+    const f = buf[S.Nr * 8 + iz];
+    if (Number.isFinite(f)) drag += f;
+  }
   for (let ir = 0; ir < S.Nr; ir++){
     const uz = buf[ir*8], rho = buf[ir*8+1], pr = buf[ir*8+2],
           M = buf[ir*8+3], Y = buf[ir*8+4], T = buf[ir*8+5];
@@ -532,7 +586,7 @@ function consumeProbeArr(buf, t){
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
   }
-  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis };
+  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag, net: thrust - drag };
   if (mx > S.peak){ S.peak = mx; S.peakT = t; }
   S.series.push([t, axis, mx]);
   if (S.series.length > 4000) S.series.splice(0, 2000);
@@ -615,6 +669,24 @@ function updateMetrics(){
     `that costs a lot of drag. It is the cheapest way to see a bow shock, and the worst way to fly.`]);
 
   flags.push(['warn',
+    `<b>Drag is pressure drag only.</b> It is the (p − p_ambient) integral over the nose, the ` +
+    `body and the base annulus, which at supersonic speed is the term that actually responds ` +
+    `to nose shape. <b>Skin friction is not in it</b> — the boundary layer is unresolved at ` +
+    `this cell size, so any wall-shear number would be a function of the grid rather than of ` +
+    `the flow. Expect real total drag to be higher, by roughly a third on a slender body.`]);
+  if (P.accelerate){
+    // quasi-steady check: how much does the airspeed move while the flow is still settling?
+    const settleMs = 2.0, dv = Math.abs(D.accel) * settleMs * Math.pow(10, P.tPerMs);
+    const frac = dv / Math.max(D.vInf, D.aAmb);
+    if (frac > 0.05) flags.push(['bad',
+      `<b>The flow cannot keep up with the trajectory.</b> At ${fmt(Math.pow(10,P.tPerMs),3)} s ` +
+      `of flight per flow millisecond the airspeed moves ${fmt(dv,0)} m/s — ${fmt(frac*100,0)}% ` +
+      `of the airspeed — in the ~2 ms the flow needs to settle. The quasi-steady coupling ` +
+      `assumes the opposite, ` +
+      `so thrust and drag are being read off a flow field that is chasing a boundary condition ` +
+      `it never reaches. Lower <b>flight time per flow ms</b>.`]);
+  }
+  flags.push(['warn',
     `<b>Two gases, both calorically perfect.</b> Exhaust is γ ${fmt(D.g,2)} / M ` +
     `${fmt(D.Me_M,1)} g/mol, atmosphere is γ ${fmt(D.ambG,2)} / M ${fmt(D.amb_M,1)} g/mol, and ` +
     `they mix by mass fraction. What is missing is chemistry: specific heats are constant, so ` +
@@ -679,9 +751,23 @@ function updateMetrics(){
       ['propellant flow', fmt(m.mdot*1000,1) + ' g/s' +
                         (D.mdot > 0 ? ` (${fmt(100*m.mdot/D.mdot,0)}% of ideal)` : '')],
       ['all gas across',fmt(m.mdotAll*1000,1) + ' g/s'],
-      ['momentum + Δp',  fmt(m.thrust,1) + ' N' +
+      ['thrust',        fmt(m.thrust,1) + ' N' +
                         (D.thrust > 0 ? ` (${fmt(100*m.thrust/D.thrust,0)}% of ideal)` : '')],
-    ]) +
+      ['pressure drag',  fmt(m.drag,1) + ' N'],
+      ['net axial force',fmt(m.net,1) + ' N'],
+    ]) + '<hr>' +
+    rows('Flight', [
+      ['airspeed',      fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
+      ['mass now',      fmt(D.massNow,2) + ' kg of ' + fmt(D.massFull,2)],
+      ['propellant flow',fmt(D.mdotUse*1000,1) + ' g/s'],
+      ['burn time',     Number.isFinite(D.burnTime) ? fmt(D.burnTime,2) + ' s' : '—'],
+      ['acceleration',  fmt(D.accel,1) + ' m/s² (' + fmt(D.accel/G0,2) + ' g)'],
+      ['Isp, measured', fmt(D.mdotUse > 0 ? D.Fmeas/(D.mdotUse*G0) : 0,0) + ' s'],
+      ['Δv, ideal',     fmt(D.deltaV,0) + ' m/s'],
+    ] .concat(P.accelerate ? [
+      ['flight time',   fmt(S.flightT,2) + ' s'],
+      ['propellant left',fmt(100*S.propLeft/Math.max(propMass(),1e-9),0) + '%'],
+    ] : [])) +
     rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
   markActiveQuality();
   markActiveChoices();
@@ -956,6 +1042,17 @@ fn outerR(z : f32) -> f32 {
   let s = clamp((z - zN) / max(zS - zN, 1e-6), 0.0, 1.0);
   if (P.vehB.w < 1.5) { return bR * s; }                        // conical
   return bR * sqrt(max(s * (2.0 - s), 0.0));                    // ellipsoidal
+}
+
+/* The external wetted surface, as a radius that is defined everywhere: zero ahead of the
+   nose, the vehicle's outer profile along it, and the nozzle exit radius aft of the base —
+   because aft of the base the surface has stopped and what remains is the opening. Written
+   this way, the projected-area difference across an axial slab telescopes correctly and a
+   uniform ambient pressure integrates to exactly zero net force. */
+fn extR(z : f32) -> f32 {
+  if (z < P.vehA.x) { return 0.0; }
+  if (z > P.vehB.y) { return P.vehC.z; }
+  return max(outerR(z), 0.0);
 }
 
 /* Internal cavity radius at z: chamber, raised-cosine contraction, then the divergent
@@ -1356,6 +1453,47 @@ fn initState(@builtin(global_invocation_id) g : vec3<u32>) {
   Db[k] = 0.0;
 }
 
+/* Axial pressure force on the external surface, one axial slab per thread, written into the
+   tail of the probe buffer for the host to sum.
+
+   For each slab the surface spans radii R0 to R1; the ring's projected area is what the axial
+   force acts on, so the integral is (p - p_ambient) . 2*pi*r*dr over that span, signed by
+   whether the ring faces forward or aft. Pressure is sampled from the fluid cell adjacent to
+   the surface on the side the flow is actually on: upstream of a forward-facing ring, aft of
+   the base. Skin friction is not included -- see the note in the panel. */
+@compute @workgroup_size(64)
+fn forceGather(@builtin(global_invocation_id) g : vec3<u32>) {
+  let iz = i32(g.x);
+  if (iz >= P.cells.x) { return; }
+  let dz = P.d.x; let dr = P.d.y; let pa = P.env.y;
+  let R0 = extR(f32(iz) * dz);
+  let R1 = extR(f32(iz + 1) * dz);
+  var fz = 0.0;
+  let rlo = min(R0, R1); let rhi = max(R0, R1);
+  if (rhi > rlo + 1.0e-9) {
+    let forward = R1 > R0;
+    var sgn = -1.0; if (forward) { sgn = 1.0; }
+    let step = select(1, -1, forward);              // walk away from the surface
+    let ir0 = clamp(i32(rlo / dr), 0, P.cells.y - 1);
+    let ir1 = clamp(i32(rhi / dr), 0, P.cells.y - 1);
+    for (var ir = ir0; ir <= ir1; ir++) {
+      let ra = max(f32(ir) * dr, rlo);
+      let rb = min(f32(ir + 1) * dr, rhi);
+      if (rb <= ra) { continue; }
+      var kz = clamp(iz + step, 0, P.cells.x - 1);
+      for (var s = 0; s < 8; s++) {
+        if (!blocked(kz, ir)) { break; }
+        kz = clamp(kz + step, 0, P.cells.x - 1);
+      }
+      let k = cIdx(kz, ir);
+      let w = toPrim(Ua[k], Da[k]);
+      // geometry is in millimetres and pressure in pascals, so the area needs converting
+      fz = fz + sgn * (w.w.w - pa) * PI * (rb * rb - ra * ra) * 1.0e-6;
+    }
+  }
+  probeB[u32(8 * P.cells.y) + u32(iz)] = fz;
+}
+
 /* One radial column at the measurement plane: (u_z, rho, p, Mach, Y, T) per cell. */
 @compute @workgroup_size(64)
 fn probeGather(@builtin(global_invocation_id) g : vec3<u32>) {
@@ -1492,7 +1630,7 @@ async function compInit(){
   const plK = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglF] });
   const plS = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglS, WG.bglS] });
   CP.pipe = {};
-  for (const n of ['fluxZ','fluxR','update','waveSpeed','initState','probeGather'])
+  for (const n of ['fluxZ','fluxR','update','waveSpeed','initState','probeGather','forceGather'])
     CP.pipe[n] = dev.createComputePipeline({ layout:plK, compute:{ module:modK, entryPoint:n } });
   CP.pipe.show = dev.createRenderPipeline({ layout:plS,
     vertex:{ module:modS, entryPoint:'vs' },
@@ -1516,7 +1654,7 @@ function compAlloc(){
   B.Fz = mk((S.Nz + 1) * S.Nr, 32);
   B.Fr = mk(S.Nz * (S.Nr + 1), 32);
   B.wav = mk(nC, 8);
-  B.probe = mk(S.Nr * 8, 4);
+  B.probe = mk(S.Nr * 8 + S.Nz + 8, 4);   // probe column, then one axial force per station
 
   CP.bg = [];
   for (let i = 0; i < 3; i++){
@@ -1552,7 +1690,8 @@ function compAlloc(){
     { binding:1, resource:{ buffer:L.out } }]}));
 
   CP.stageMax   = dev.createBuffer({ size:8, usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  CP.stageProbe = dev.createBuffer({ size:Math.max(32, S.Nr * 32),
+  CP.probeBytes = (S.Nr * 8 + S.Nz) * 4;
+  CP.stageProbe = dev.createBuffer({ size:Math.max(32, CP.probeBytes),
     usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   CP.mapBusy = false;
   CP.gen = (CP.gen || 0) + 1;
@@ -1622,6 +1761,7 @@ function compSteps(n){
   pass.setBindGroup(1, CP.bg[CP.idx][0]);
   pass.setPipeline(CP.pipe.waveSpeed);   pass.dispatchWorkgroups(gc[0], gc[1]);
   pass.setPipeline(CP.pipe.probeGather); pass.dispatchWorkgroups(Math.ceil(S.Nr / 64));
+  pass.setPipeline(CP.pipe.forceGather); pass.dispatchWorkgroups(Math.ceil(S.Nz / 64));
   pass.setPipeline(WG.pipe.reduceMax);
   CP.red.forEach((L, i) => {
     pass.setBindGroup(0, CP.bgRP, [i * PARAM_STRIDE]);
@@ -1633,10 +1773,10 @@ function compSteps(n){
   const last = CP.red[CP.red.length - 1];
   // Capture the staging buffers and the grid generation now: a rebuild may swap both out
   // before this readback resolves, and unmapping the wrong buffer corrupts the next submit.
-  const sMax = CP.stageMax, sProbe = CP.stageProbe, gen = CP.gen, nr = S.Nr;
+  const sMax = CP.stageMax, sProbe = CP.stageProbe, gen = CP.gen, nb = CP.probeBytes;
   if (!CP.mapBusy){
     enc.copyBufferToBuffer(last.out, 0, sMax, 0, 8);
-    enc.copyBufferToBuffer(B.probe, 0, sProbe, 0, nr * 32);
+    enc.copyBufferToBuffer(B.probe, 0, sProbe, 0, nb);
   }
   dev.queue.submit([enc.finish()]);
 
@@ -1658,7 +1798,26 @@ function compSteps(n){
   }
 
   S.t += simmed;
+  if (P.accelerate) advanceFlight(simmed);
   return simmed;
+}
+
+/* Quasi-steady trajectory coupling. The flow settles in about 2 ms and a burn lasts seconds,
+   so the two clocks are separated by three or four orders of magnitude and the ratio is a
+   control rather than something to derive. Thrust and drag come from the last readback, which
+   makes this an explicit step lagged by a frame — harmless at this ratio. Axial forces only:
+   no gravity, no flight-path angle. */
+function advanceFlight(simmedMs){
+  const m = S.meas;
+  if (!m) return;
+  const dtF = simmedMs * Math.pow(10, P.tPerMs);          // ms of flow -> s of flight
+  const mass = Math.max(dryMass() + S.propLeft, 1e-6);
+  S.vFlight = Math.max(0, S.vFlight + (m.net / mass) * dtF);
+  if (S.propLeft > 0){
+    S.propLeft = Math.max(0, S.propLeft - Math.max(m.mdot, 0) * dtF);
+    if (S.propLeft <= 0 && S.shutT < 0) S.shutT = S.t;    // note the flow time of burnout
+  }
+  S.flightT += dtF;
 }
 
 function compRender(targetView, outW, outH){
@@ -2296,10 +2455,14 @@ function drawOverlay(cx, w, h, headerH, simH, footerH, sc){
   cx.textBaseline = 'middle';
   cx.textAlign = 'left';
   const pad = Math.round(10 * sc);
-  cx.fillText(`t = ${S.t.toFixed(2)} ms`, pad, headerH * 0.32);
+  const Dv = derived(), mm = S.meas;
+  cx.fillText(`t = ${S.t.toFixed(2)} ms` +
+              (mm ? `    thrust ${fmt(mm.thrust,0)} N    drag ${fmt(mm.drag,0)} N` +
+                    `    net ${fmt(mm.net,0)} N` : '') +
+              (P.accelerate ? `    v ${fmt(Dv.vInf,0)} m/s    ${fmt(Dv.accel/G0,1)} g` : ''),
+              pad, headerH * 0.32);
   cx.fillStyle = '#8b97a6';
   cx.font = `${Math.round(11 * sc)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  const Dv = derived();
   cx.fillText(`\u03b5 ${fmt(Dv.eps,2)} \u00b7 p_c ${fmt(P.pcBar,0)} bar \u00b7 T_c ${fmt(P.Tc,0)} K \u00b7 ` +
               `p_amb ${fmtP(Dv.pa)} \u00b7 M\u221e ${fmt(Dv.machInf,2)} \u00b7 ` +
               `${P.nozShape === 0 ? 'conical' : 'bell'} nozzle`,
@@ -2344,6 +2507,7 @@ const sliders = {};
 let pendingRebuild = false;
 
 function fmtVal(it, v){
+  if (it.kind === 'check') return v ? 'on' : 'off';
   if (it.choices) return it.choices[Math.round(v)] || String(v);
   if (it.log){
     const x = Math.pow(10, v);
@@ -2399,6 +2563,25 @@ function markActiveChoices(){
 
 function addControl(body, it){
   if (it.kind === 'buttons'){ addChoiceRow(body, it); return; }
+  if (it.kind === 'check'){
+    const wrap = document.createElement('div');
+    wrap.className = 'ctl';
+    wrap.innerHTML = `<label class="chk"><input type="checkbox" id="s_${it.k}"> ${it.t}</label>` +
+                     (it.hint ? `<div class="hint">${it.hint}</div>` : '');
+    body.appendChild(wrap);
+    const box = wrap.querySelector('input');
+    box.checked = !!it.v;
+    box.toggleAttribute('checked', box.checked);
+    sliders[it.k] = { inp:box, out:null, it, check:true };
+    box.addEventListener('change', () => {
+      P[it.k] = box.checked ? 1 : 0;
+      box.toggleAttribute('checked', box.checked);
+      if (P[it.k]) resetSim();          // the trajectory starts from the airspeed on the slider
+      scheduleURLSync(true);
+      updateMetrics();
+    });
+    return;
+  }
   const wrap = document.createElement('div');
   wrap.className = 'ctl' + (it.rebuild ? ' rebuild' : '');
   if (it.choices){
@@ -2598,6 +2781,12 @@ function markActiveQuality(){
 function syncSliders(){
   for (const k in sliders){
     const s = sliders[k];
+    if (s.check){
+      s.inp.checked = !!P[k];
+      s.inp.toggleAttribute('checked', s.inp.checked);   // so DOM clones keep the state
+      P[k] = s.inp.checked ? 1 : 0;
+      continue;
+    }
     s.inp.value = P[k];
     P[k] = parseFloat(s.inp.value);          // re-read so clamping to the control's range applies
     if (s.out) s.out.textContent = fmtVal(s.it, P[k]);
@@ -2641,6 +2830,7 @@ const URLKEY = {
   pAmbLog:'pa', tAmb:'ta', vAmb:'va',
   gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',
   visc:'nu', smag:'cs', dyeDiss:'dd',
+  accelerate:'ac', dryMassLog:'dm', propMassLog:'pm', tPerMs:'tp',
   downrange:'dn', rDomain:'rd', zAspect:'za', res:'rs', cfl:'cf', budget:'bg', spf:'sp',
   probe:'pb',
   vidFlight:'vf', vidMsPerFrame:'vm', vidFps:'vr', vidWidth:'vw', vidMbps:'vb',
@@ -2678,8 +2868,11 @@ function applyStateFromURL(){
     const pk = URLKEY_INV[key];
     if (pk && Number.isFinite(num)){
       const sp = SPEC[pk];
-      P[pk] = Math.min(sp.max, Math.max(sp.min, num));   // clamp: links can be hand-edited
-      if (sp.choices) P[pk] = Math.round(P[pk]);
+      if (sp.kind === 'check') P[pk] = num ? 1 : 0;
+      else {
+        P[pk] = Math.min(sp.max, Math.max(sp.min, num));   // clamp: links can be hand-edited
+        if (sp.choices) P[pk] = Math.round(P[pk]);
+      }
       any = true;
     }
     else if (key === 'ap'){ OPT.autoPace = num !== 0; any = true; }
@@ -2830,16 +3023,22 @@ function frame(){
   }
 
   const steps = OPT.autoPace ? Math.max(1, Math.round(S.spfAuto)) : P.spf;
-  const C = chamberState(S.t);
+  const C = chamberState(S.t), mm = S.meas;
+  const D0 = derived();
   hud.textContent =
     `t = ${S.t.toFixed(3)} ms   dt = ${(S.dt*1e6).toFixed(2)} ns   ` +
     `max Mach ${CP.machMax.toFixed(2)}   peak |u| ${S.vmax.toFixed(0)} m/s\n` +
     `chamber ${(C.p/1e5).toFixed(2)} bar   ${C.T.toFixed(0)} K` +
-    (S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') + `\n` +
+    (S.shutT >= 0 ? '   ○ burnout' : S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') + `\n` +
+    `thrust ${mm ? mm.thrust.toFixed(0) : '—'} N   drag ${mm ? mm.drag.toFixed(0) : '—'} N   ` +
+    `net ${mm ? mm.net.toFixed(0) : '—'} N   ` +
+    (P.accelerate
+      ? `v ${D0.vInf.toFixed(0)} m/s   a ${(D0.accel/G0).toFixed(1)} g   ` +
+        `T+${S.flightT.toFixed(2)} s   prop ${(100*S.propLeft/Math.max(propMass(),1e-9)).toFixed(0)}%`
+      : `M∞ ${D0.machInf.toFixed(2)}`) + `\n` +
     `${fps.toFixed(0)} fps   ${steps} steps/frame   ` +
-    `${S.simRate.toFixed(2)} ms of flight per second\n` +
-    `compressible Navier–Stokes (HLLC / MUSCL / SSP-RK2)   ` +
-    `${(steps*6).toLocaleString()} dispatches/frame, 1 submit`;
+    `${S.simRate.toFixed(2)} ms of flight per second   ` +
+    `${(steps*7).toLocaleString()} dispatches/frame, 1 submit`;
 
   requestAnimationFrame(frame);
 }

@@ -52,6 +52,7 @@ prediction.
 | **Nozzle** | throat radius, exit radius, converging and diverging lengths, and a **conical or bell** divergent contour |
 | **Airframe** | nose cone shape and length, forebody length, wall thickness |
 | **Atmosphere** | six worlds as buttons, plus ambient pressure on a log slider from 10 Pa to 10 MPa, temperature, flight speed, γ and R directly |
+| **Vehicle & flight** | acceleration on/off, dry mass, propellant mass, and the ratio between flight time and flow time |
 | **Fluid** | viscosity, Smagorinsky constant, tracer fade |
 | **Domain & solver** | plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
 | **Measurement** | where the measurement plane sits, from the exit plane downstream |
@@ -109,6 +110,8 @@ choices are not independent:
 - Fire the default engine into **Jupiter** and compare the plume with Earth at the same
   pressure. Only the ambient gas changed.
 - Move the measurement plane downstream and watch the thrust integral stop meaning thrust.
+- Tick **accelerate**, raise the flight-time ratio, and watch drag climb as v² until burnout —
+  then watch the vehicle slow down under it.
 
 ---
 
@@ -171,7 +174,12 @@ exit — and they update as you drag.
 freestream Mach.
 
 **Measured** is what the grid did: on-axis and peak axial velocity, peak Mach at the plane and
-anywhere in the field, and two mass flows.
+anywhere in the field, two mass flows, and the axial force balance — thrust, pressure drag and
+the net of the two. Thrust and drag also appear live in the readout over the flow and in the
+header of exported video.
+
+**Flight** turns that force balance into trajectory numbers: airspeed, current mass, burn time,
+acceleration, measured Isp and ideal Δv.
 
 Those two mass flows matter. `propellant flow` is weighted by the exhaust tracer and is the
 one to compare against the choked-throat figure; `all gas across` is everything crossing the
@@ -188,6 +196,87 @@ cost real momentum, an under-resolved throat, a transonic freestream making the 
 genuine interaction. Warnings that invalidate the numbers appear *above* them.
 
 <img src="docs/img/panel-warnings.png" alt="Warning panel for a badly over-expanded nozzle" width="360">
+
+---
+
+## Thrust, drag and flight
+
+### Where the two numbers come from
+
+They are separate integrals over separate surfaces, which is why they do not double-count.
+
+**Thrust** is the momentum-plus-pressure integral across the nozzle exit plane, over the exit
+area only: ∫(ρu² + p − p_ambient) dA.
+
+**Drag** is the (p − p_ambient) integral over the *external* wetted surface — the nose, the
+body and the base annulus. It is computed as one axial slab per thread: each slab's surface
+spans some range of radii, and the axial force is the gauge pressure over that ring's projected
+area, signed by whether the ring faces forward or aft. Pressure is sampled from the fluid cell
+adjacent to the surface on the side the flow is on — upstream of a forward-facing ring, aft of
+the base. Written with a surface radius that is zero ahead of the nose and the nozzle exit
+radius aft of the base, the slabs telescope correctly and a uniform ambient pressure integrates
+to exactly zero force, which is the check that the bookkeeping is right.
+
+**Skin friction is not included.** The boundary layer is unresolved at this cell size, so any
+wall-shear number would be a function of the grid rather than of the flow. What is reported is
+pressure drag, which at supersonic speed is the term that responds to nose shape — and the term
+this tool is useful for. Expect real total drag to be higher, by roughly a third on a slender
+body.
+
+### Does the drag number stand up?
+
+Three nose shapes at Mach 2, everything else identical, C_D referenced to the frontal area:
+
+| nose | drag | C_D | expected |
+|---|---|---|---|
+| flat | 261 N | **1.50** | 1.5–1.8 for a flat-faced cylinder; the normal-shock stagnation pressure alone gives 1.65 |
+| pointy (27° half-angle) | 94 N | 0.54 | cone wave drag plus base drag |
+| rounded | 95 N | 0.55 | as pointy, at this stubby fineness ratio |
+
+The second independent check is the velocity scaling. During an accelerating run, drag went
+10.8 N at 144 m/s → 113 N at 447 m/s: a speed ratio of 3.1 against a drag ratio of 10.5, where
+v² would predict 9.6.
+
+### Flying a trajectory
+
+<img src="docs/img/flight-controls.png" alt="The vehicle and flight controls" width="330">
+
+Tick **accelerate** and the airspeed stops being a boundary condition and becomes a state. The
+vehicle accelerates under thrust minus drag, burns propellant at the rate the solver is already
+measuring, and shuts the chamber down when the tanks are dry — ramped down over the ignition
+time rather than cut, because a step would launch an expansion wave as violent as the starting
+shock. There is **no consumption-rate input** because there is nothing to input: ṁ is measured.
+
+**Gravity and flight-path angle are not modelled.** This is the axial force balance only, so Δv
+is the propulsive figure with no gravity or drag losses subtracted.
+
+A whole flight, at 3.16 s of flight per flow millisecond, from a standing start:
+
+| flight time | airspeed | propellant | thrust | drag |
+|---|---|---|---|---|
+| T+1.85 s | 144 m/s | 0.86 kg | 489 N | 11 N |
+| T+3.74 s | 447 m/s | 0.40 kg | 479 N | 113 N |
+| T+5.63 s | 671 m/s | 0.01 kg | 481 N | 344 N |
+| T+7.53 s | 551 m/s | dry | 11 N | 296 N |
+| T+9.41 s | 373 m/s | dry | −5 N | 108 N |
+
+Burnout at T+5.6 s, and from there the vehicle coasts and decelerates under its own drag.
+
+![Mid-burn at Mach 2, accelerating](docs/img/flight.png)
+
+### The honest problem with watching a burn
+
+The flow settles in about 2 ms. A burn lasts seconds. Those two clocks are four orders of
+magnitude apart, so the coupling is **quasi-steady**: the trajectory is integrated on its own
+clock, and the ratio between the two is a slider rather than something that can be derived.
+
+At the default 0.02 s of flight per flow millisecond the airspeed moves about 6 m/s while the
+flow is settling — properly quasi-steady, and far too slow to sit and watch a 5 second burn.
+Raise the ratio and you can watch the bow shock build in seconds, but the flow is then chasing
+a boundary condition it never catches. The panel computes that directly — how far the airspeed
+moves during one settling time, against the larger of the airspeed and the ambient sound speed
+— and puts a red flag above the numbers when it exceeds 5 %. The table above was run well past
+that threshold, which is why it is a demonstration rather than a result.
 
 ---
 
@@ -453,7 +542,7 @@ in bands above and below the image rather than on top of the flow.
 
 Every physical setting is serialised into the URL fragment, so a link reproduces a
 configuration exactly. Only non-defaults are written and the keys are two characters, so a
-typical link carries a handful; with all 37 parameters off their defaults it comes to 287
+typical link carries a handful; with all 41 parameters off their defaults it comes to 315
 characters.
 
 The fragment is used rather than the query string because it never reaches a server, and
@@ -463,7 +552,7 @@ because assigning `location.hash` works on `file://` URLs where Chrome throws on
 Links are validated on the way in — values clamped to their control's range, unknown keys and
 unparseable numbers ignored — so a hand-edited `#tr=99999&re=-50&ra=abc&nt=77` loads as a
 valid configuration rather than breaking. Round-tripping is tested: encoding a fully
-non-default configuration, resetting everything, then decoding restores all 37 settings with
+non-default configuration, resetting everything, then decoding restores all 41 settings with
 zero mismatches.
 
 Back and forward restore the configuration *and* restart the run — otherwise you would be
@@ -477,7 +566,7 @@ On an Apple M1, at the 30 ms default frame budget:
 | quality | grid | cells across throat R | steps/frame | ms of flight per second | to steady state |
 |---|---|---|---|---|---|
 | Draft | 257 × 64 | 7.3 | 111 | 0.72 | ~3 s |
-| **Balanced** (default) | 450 × 112 | 12.8 | 33 | **0.08** | ~25 s |
+| **Balanced** (default) | 450 × 112 | 12.8 | 43 | **0.11** | ~19 s |
 
 Balanced is the one to believe and Draft is the one to sweep parameters with — 9× the
 throughput for a discharge coefficient that reads 80 % instead of 91 %. The readout at the top
@@ -508,8 +597,8 @@ reproduce across resolutions.
 
 **Not the absolute measured figures.** They are converged to a few percent on the default grid
 for the throat and the exit plane, which is good enough to rank designs and not good enough to
-quote a thrust. And every performance number is a frozen-flow number: real chemistry recovers
-a few percent that this does not.
+quote a thrust. Every performance number is a frozen-flow number: real chemistry recovers a few
+percent that this does not. And the drag is pressure drag: real total drag is higher.
 
 ---
 
