@@ -146,8 +146,9 @@
 const CONTROLS = [
  { group:'Chamber & injector', open:true, items:[
    { k:'pcBar',   t:'Chamber pressure',      min:1,   max:300, step:1,   v:20,   unit:'bar',
-     hint:'Stagnation pressure held at the injector face. The nozzle chokes once this is ' +
-          'above about 1.9× ambient; everything downstream scales with the ratio, not the value.' },
+     hint:'Stagnation pressure held at the injector face. The nozzle chokes above the critical ' +
+          'ratio — 1.77× ambient at γ = 1.2, 1.89× at γ = 1.4, and the panel shows the live ' +
+          'figure. Everything downstream scales with the ratio, not with the value.' },
    { k:'Tc',      t:'Chamber temperature',   min:300, max:4000,step:25,  v:3000, unit:'K',
      hint:'Stagnation temperature of the injected gas. Sets the sound speed, and with it both ' +
           'the exhaust velocity and the timestep.' },
@@ -163,7 +164,7 @@ const CONTROLS = [
    { k:'throatR',  t:'Throat radius',        min:1,  max:40,  step:0.25, v:8,    unit:'mm', rebuild:true,
      hint:'The single most important number here. Mass flow is proportional to throat area ' +
           'once choked, and the grid needs ≳6 cells across the throat radius to mean anything.' },
-   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:13.5, unit:'mm', rebuild:true,
+   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:15.25,unit:'mm', rebuild:true,
      hint:'With the throat, this fixes the expansion ratio and therefore the design altitude.' },
    { k:'convLen',  t:'Converging length',    min:2,  max:120, step:1,    v:20,   unit:'mm', rebuild:true,
      hint:'Contour is a raised cosine, so it meets both the chamber wall and the throat with ' +
@@ -200,13 +201,14 @@ const CONTROLS = [
           'down the body into the base region, where it shears against the plume.' },
  ]},
  { group:'Gas', items:[
-   { k:'gamma',    t:'Ratio of specific heats γ', min:1.1, max:1.67, step:0.01, v:1.4,
-     hint:'ONE gas fills the whole domain, ambient and exhaust alike. Air is 1.4; rocket ' +
-          'exhaust is nearer 1.2. Lowering it makes the plume expand like combustion products ' +
-          'but also makes the "air" outside stop being air.' },
-   { k:'Rgas',     t:'Specific gas constant R', min:150, max:600, step:1, v:287, unit:'J/kg·K',
-     hint:'Air is 287; kerolox exhaust is around 350–380, hydrolox around 690 (off this ' +
-          'slider). Same caveat: it applies everywhere.' },
+   { k:'gamma',    t:'Ratio of specific heats γ', min:1.1, max:1.67, step:0.01, v:1.2,
+     hint:'ONE gas fills the whole domain, ambient and exhaust alike, so this is a choice ' +
+          'about which end to get right. The default 1.2 is rocket exhaust; air is 1.4. At 1.2 ' +
+          'the engine numbers are honest and the atmosphere is not — see below.' },
+   { k:'Rgas',     t:'Specific gas constant R', min:150, max:600, step:1, v:350, unit:'J/kg·K',
+     hint:'Default 350 is kerolox-like exhaust (hydrolox is nearer 690, off this slider); air ' +
+          'is 287. At 350 the modelled atmosphere is 18% less dense than real air at the same ' +
+          'pressure and temperature, which is the price of a correct plume.' },
    { k:'visc',     t:'Kinematic viscosity',  min:0, max:1, step:0.0001, v:0.0151, unit:'mm²/ms',
      hint:'Air at 20 °C = 0.0151. Constant, not Sutherland — the boundary layers here are ' +
           'unresolved anyway.' },
@@ -380,24 +382,24 @@ function derived(){
 
 
 const PRESETS = [
- { n:'Sea-level booster', d:'ε ≈ 2.8, sized for 100 kPa',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:13.5, divLen:25, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0 } },
- { n:'Vacuum upper stage', d:'ε ≈ 40, fired at 1 kPa',
+ { n:'Sea-level booster', d:'ε ≈ 3.6, matched to 100 kPa',
+   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:15.25, divLen:25, convLen:20, nozShape:1,
+       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
+ { n:'Vacuum upper stage', d:'ε ≈ 40 at 1 kPa — under-expanded, as real ones are',
    p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:0, vAmb:0 } },
+       pAmbLog:0, vAmb:0, gamma:1.2, Rgas:350 } },
  { n:'Over-expanded', d:'the vacuum bell at sea level',
    p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0 } },
+       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
  { n:'Under-expanded', d:'stubby nozzle, shock diamonds',
    p:{ pcBar:60, Tc:3000, throatR:8, nozExitR:10, divLen:12, convLen:20, nozShape:0,
-       pAmbLog:2, vAmb:0 } },
+       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
  { n:'Supersonic flight', d:'Mach 2 at 10 km, base flow',
-   p:{ pcBar:40, Tc:3000, throatR:8, nozExitR:20, divLen:45, convLen:20, nozShape:1,
-       pAmbLog:1.4, tAmb:223, vAmb:600, noseType:1 } },
- { n:'Cold gas thruster', d:'no combustion, 300 K nitrogen-ish',
-   p:{ pcBar:10, Tc:300, throatR:8, nozExitR:20, divLen:45, convLen:20, nozShape:1,
-       pAmbLog:0, vAmb:0 } },
+   p:{ pcBar:40, Tc:3000, throatR:8, nozExitR:24, divLen:55, convLen:20, nozShape:1,
+       pAmbLog:1.4, tAmb:223, vAmb:600, noseType:1, gamma:1.2, Rgas:350 } },
+ { n:'Cold gas thruster', d:'nitrogen, no combustion — γ and R are air-like again',
+   p:{ pcBar:10, Tc:300, throatR:8, nozExitR:23, divLen:45, convLen:20, nozShape:1,
+       pAmbLog:1, vAmb:0, gamma:1.4, Rgas:297 } },
 ];
 
 /* ========================== simulation state ========================== */
@@ -514,7 +516,11 @@ function updateMetrics(){
     `Strongly under-expanded: exit pressure ${fmt(D.peRatio,1)}× ambient. The plume goes on ` +
     `expanding outside through a Prandtl–Meyer fan, then over-shoots into a Mach disc and a ` +
     `train of shock diamonds. Watch the schlieren field. A longer bell (exit radius ` +
-    `${fmt(D.reOpt,1)} mm) would recover it.`]);
+    `${fmt(D.reOpt,1)} mm) would recover it` +
+    (D.pa < 5000
+      ? `, but the optimum expansion ratio grows without bound as ambient pressure falls, so ` +
+        `every real vacuum nozzle is under-expanded and truncated to save mass. This is normal.`
+      : `.`)]);
   else if (D.peRatio > 1.25) flags.push(['warn',
     `Mildly under-expanded: exit pressure ${fmt(D.peRatio,2)}× ambient.`]);
   else flags.push(['good',

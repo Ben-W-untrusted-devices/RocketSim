@@ -49,11 +49,9 @@ Combustion, mixing, injector elements, multiple species, chemistry of any kind, 
 ablation, film cooling, nozzle flexure. The chamber is simply *held* at a stagnation state.
 
 **One gas fills the whole domain.** γ and R are sliders, but they apply to the exhaust and to
-the atmosphere alike. Air is γ = 1.4, R = 287; real rocket exhaust is nearer γ = 1.2,
-R = 350. Setting those makes the plume expand correctly and makes the "air" outside stop
-being air. Pick whichever end of the problem you are studying — and note that the default
-Isp figures are low for the same reason: they are the Isp of hot *air*, not of combustion
-products.
+the atmosphere alike. The defaults are γ = 1.2 and R = 350 J/kg·K — roughly kerolox exhaust —
+which makes the engine right and the atmosphere wrong. [The cost of one
+gas](#the-cost-of-one-gas) works out exactly how wrong, and when to switch back to air.
 
 Axial symmetry forbids the three-dimensional instabilities that break a real shear layer up,
 so the Smagorinsky term stands in for them. It is a stand-in, not a substitute.
@@ -91,32 +89,36 @@ offset.
 
 ## What it predicts, and how well
 
-Default configuration: 25 mm chamber, 8 mm throat, 13.5 mm exit (ε = 2.85), bell contour,
-20 bar and 3000 K, at 100 kPa ambient, still air. Measured at the nozzle exit plane at
-t = 1.2 ms, by which point the flow is steady.
+Default configuration: 25 mm chamber, 8 mm throat, 15.25 mm exit (ε = 3.63), bell contour,
+20 bar and 3000 K of γ = 1.2 / R = 350 gas, at 100 kPa ambient, still air. That exit radius is
+the optimum for this pressure ratio, so the default is a matched nozzle: exit pressure comes
+out at 1.00× ambient. Measured at the nozzle exit plane at t = 1.2 ms, by which point the flow
+is steady.
 
 ### It chokes, and the mass flow saturates
 
 Sweeping chamber pressure at fixed geometry, against
 `ṁ = p_c·A_t·√(γ/RT₀)·(2/(γ+1))^((γ+1)/2(γ−1))`:
 
-| p_c / p_ambient | ideal ṁ | measured ṁ | ratio |
-|---|---|---|---|
-| 3 | 44.5 g/s | 20.6 g/s | 0.46 |
-| 5 | 74.2 g/s | 63.6 g/s | 0.86 |
-| 10 | 148.4 g/s | 145.7 g/s | **0.98** |
-| 20 | 296.7 g/s | 286.3 g/s | **0.97** |
+| p_c / p_ambient | ideal ṁ | measured propellant ṁ | ratio | *all* gas crossing the plane |
+|---|---|---|---|---|
+| 3 | 38.2 g/s | 24.9 g/s | 0.65 | 92.6 g/s |
+| 5 | 63.6 g/s | 59.8 g/s | 0.94 | 91.7 g/s |
+| 10 | 127.3 g/s | 127.9 g/s | **1.01** | 139.6 g/s |
+| 20 | 254.5 g/s | 236.7 g/s | **0.93** | 244.6 g/s |
 
-Above about 10:1 the measured flow tracks the choked-throat formula to within 3 % and scales
-linearly with chamber pressure, which is the signature of a choked throat: the nozzle has
-stopped listening to the ambient.
+Above about 10:1 the measured flow tracks the choked-throat formula to within a few percent
+and scales linearly with chamber pressure, which is the signature of a choked throat: the
+nozzle has stopped listening to the ambient.
 
-The two low rows are **not** a solver error, and reading them as one is the trap. At ε = 2.85
-the nozzle needs roughly 20:1 to flow full. At 3:1 it is grossly over-expanded, a shock
-system sits inside the divergent section, the jet separates from the wall and recirculates —
-so the *exit plane* is simply the wrong place to measure the *throat's* mass flow. The panel
-reports both the tracer-weighted propellant flux and the total gas crossing the plane, and
-the two diverge exactly when this is happening.
+The first row is **not** a solver error, and reading it as one is the trap. At ε = 3.63 the
+nozzle needs roughly 20:1 to flow full. At 3:1 it is grossly over-expanded, a shock system
+sits inside the divergent section, the jet separates from the wall and recirculates — so the
+*exit plane* is simply the wrong place to measure the *throat's* mass flow. Look at the last
+column: at 3:1 nearly four times more gas crosses the exit plane than the throat passes,
+because most of it is ambient air being entrained and dragged through. That is why the panel
+reports the tracer-weighted propellant flux and the total separately. The two diverging *is*
+the diagnostic.
 
 ### It converges
 
@@ -124,9 +126,9 @@ Same case at three radial resolutions:
 
 | radial cells | cells across throat R | grid | ṁ vs ideal | exit-plane thrust | on-axis u_z | wall time for 1.2 ms |
 |---|---|---|---|---|---|---|
-| 64 | 7.3 | 257 × 64 | 84 % | 414 N | 1934 m/s | 0.6 s |
-| 112 (default) | 12.8 | 450 × 112 | 96 % | 477 N | 1938 m/s | 2.6 s |
-| 176 | 20.1 | 708 × 176 | 98 % | 479 N | 1896 m/s | 13 s |
+| 64 | 7.3 | 257 × 64 | 83 % | 417 N | 2336 m/s | 0.7 s |
+| 112 (default) | 12.8 | 450 × 112 | 93 % | 480 N | 2356 m/s | 2.2 s |
+| 176 | 20.1 | 708 × 176 | 95 % | 484 N | 2390 m/s | 10.7 s |
 
 Monotone, and converged to a couple of percent by the default. This is worth stating plainly
 because **the upstream Airzooka case did not converge** — its answer wandered by a factor of
@@ -140,10 +142,10 @@ cell count, and the panel shows it live and warns below six.
 
 ### It loses what a real nozzle loses
 
-At the default, measured exit-plane momentum-plus-pressure is 86–87 % of 1-D ideal thrust
-(552 N ideal, 477 N measured). The missing 13 % is boundary layer, non-uniform exit profile,
+At the default, measured exit-plane momentum-plus-pressure is 85 % of 1-D ideal thrust
+(566 N ideal, 480 N measured). The missing 15 % is boundary layer, non-uniform exit profile
 and the finite-rate startup — all things 1-D theory assumes away. Do not quote the absolute
-number; a real nozzle of this size would also have wall heat transfer and a real gas.
+number; a real nozzle of this size would also have wall heat transfer and real-gas effects.
 
 ### Inherited solver validation
 
@@ -158,7 +160,104 @@ These were measured on the upstream build of the same kernels and carry over unc
 - **Choking through a sharp orifice**: mass flow plateaus above the critical pressure ratio
   at 87 % of ideal, which is the discharge coefficient of a sharp-edged short tube — a real
   vena-contracta effect. The smooth cosine contraction used here has no such contraction,
-  which is why its coefficient is 0.97 rather than 0.87.
+  which is why its coefficient sits near 1.0 rather than 0.87.
+
+
+---
+
+## The cost of one gas
+
+The defaults are γ = 1.2 and R = 350 J/kg·K, roughly kerolox exhaust. Since the solver carries
+no species, that gas is also the atmosphere. This is the model's largest deliberate
+approximation, so here is exactly what it costs, and why the default sits where it does.
+
+### What the atmosphere loses
+
+At 101.325 kPa and 288.15 K:
+
+| | real air (1.4 / 287) | model (1.2 / 350) | error |
+|---|---|---|---|
+| density | 1.225 kg/m³ | 1.005 kg/m³ | **−18 %** |
+| speed of sound | 340.3 m/s | 347.9 m/s | +2.2 % |
+
+Density is the one that matters: 18 % low means dynamic pressure ½ρV², and every aerodynamic
+force with it, is 18 % low. The sound speed is nearly right by luck — γR is 402 for air and
+420 here, and the square root halves the difference — so the freestream Mach number for a
+given flight speed is only about 2 % off.
+
+Across a normal shock at Mach 2:
+
+| | air | model | error |
+|---|---|---|---|
+| density ratio ρ₂/ρ₁ | 2.667 | 3.143 | +18 % |
+| pressure ratio p₂/p₁ | 4.50 | 4.27 | −5 % |
+| stagnation temperature T₀/T | 1.80 | 1.40 | **−22 %** |
+| stagnation pressure p₀/p | 7.82 | 7.53 | −4 % |
+
+Pressure is nearly right; temperature is not. At 223 K and Mach 2 the real stagnation
+temperature is 401 K and the model says 312 K, so anything about aeroheating is badly
+under-predicted.
+
+Shock standoff scales with the density ratio, and it does show up. Same flat nose, same
+geometry, same Mach 2, only the gas changed:
+
+| gas | ambient ρ | bow-shock standoff |
+|---|---|---|
+| 1.4 / 287 | 0.3925 kg/m³ | 25.6 mm (0.92 body radii) |
+| 1.2 / 350 | 0.3218 kg/m³ | 23.1 mm (0.83 body radii) |
+
+The shock sits 10 % closer to the nose than it should.
+
+### What the engine would lose, the other way round
+
+If instead you kept air properties and used them for the exhaust — 3000 K, 20 bar, each
+expanded to its own optimum for 100 kPa:
+
+| | air (1.4 / 287) | exhaust (1.2 / 350) | difference |
+|---|---|---|---|
+| enthalpy ceiling √(2c_p T_c) | 2455 m/s | 3550 m/s | **+45 %** |
+| optimum ε at 100 kPa | 2.90 | 3.63 | +25 % |
+| exit velocity | 1862 m/s | 2225 m/s | +19 % |
+| c* | 1355 m/s | 1580 m/s | +17 % |
+| Isp | 190 s | 227 s | **+19 %** |
+| mass flow | 296.7 g/s | 254.5 g/s | −14 % |
+| **thrust** | **552 N** | **566 N** | **+2.5 %** |
+
+That last row is the whole argument. **Thrust barely notices** — C_F is a weak function of γ,
+and the drop in mass flow almost exactly cancels the rise in exit velocity. But **Isp, c*,
+exit velocity and the optimum expansion ratio all move by 15–25 %**, and the enthalpy ceiling
+by nearly half. Getting the exhaust wrong corrupts every performance number and resizes the
+nozzle; getting the ambient wrong costs 18 % on density and a fifth on recovery temperature.
+
+The exhaust is the more expensive end to get wrong. That is why the default sits there.
+
+### Switching ends
+
+Set **γ = 1.4, R = 287** whenever the question is about the outside of the vehicle — bow shock
+shape, nose-cone comparison, drag, aeroheating — and read the engine block as nonsense while
+you do. The **Cold gas thruster** preset does this legitimately rather than as a compromise:
+cold nitrogen really is a γ = 1.4 gas, so that one preset has both ends right at once.
+
+You can also buy back ambient density by lowering the ambient temperature — 236 K instead of
+288 K at 100 kPa restores ρ = 1.225 kg/m³ — but the sound speed then reads 7 % low. Two knobs,
+three things to match; something has to give.
+
+### What stays right either way
+
+The pressure ratio p_c/p_a is exact. Choking, the area–Mach relation and the nozzle's internal
+gas dynamics are all exact for whatever γ is set. Plume shock-cell structure is driven mostly
+by the exit pressure ratio and the geometry, so the *shape* of the plume is about right even
+when the ambient density is not.
+
+### The one thing no single-gas model can do
+
+In reality the plume boundary is a contact discontinuity with a **molecular-weight jump**
+across it: at equal pressure and temperature, exhaust is roughly 1.2× less dense than air
+because its R is larger. With no species there is no such jump, and the density ratio across
+the plume edge comes from temperature alone. Shear-layer growth, entrainment and the
+plume-to-freestream momentum ratio are therefore off by something like 20 %, and **no choice of
+γ and R fixes it** — the two gases would need different values at the same instant. That is a
+second species and a variable-γ Riemann solver, which is a different solver, not a setting.
 
 ---
 
@@ -194,20 +293,26 @@ genuine interaction.
 
 ### Presets
 
-Each one sets nozzle, chamber and atmosphere *together*, because the point is that a nozzle
-is only ever right for one altitude. **Sea-level booster** and **Vacuum upper stage** are both
-well-designed; **Over-expanded** is the vacuum bell fired at sea level and shows the
-separation and the shock system moving inside the nozzle; **Under-expanded** is a stubby
+Each one sets nozzle, chamber, atmosphere *and gas* together, because the point is that a
+nozzle is only ever right for one altitude. **Sea-level booster** (ε = 3.6, matched, Isp 227 s)
+and **Vacuum upper stage** (ε = 40, Isp 300 s) are both well designed — the vacuum one reads as
+under-expanded because in a true vacuum the optimum expansion ratio is infinite, so every real
+vacuum nozzle is under-expanded and truncated to save mass; **Over-expanded** is that same
+vacuum bell fired at sea level and shows the separation and the shock system moving inside the
+nozzle; **Under-expanded** is a stubby
 nozzle at 60 bar and gives a clean train of shock diamonds; **Supersonic flight** puts a
 pointy nose at Mach 2 at 10 km, where the bow shock, the shoulder expansion and the base
-flow all show up together; **Cold gas thruster** removes combustion entirely.
+flow all show up together; **Cold gas thruster** removes combustion entirely and switches the
+gas back to nitrogen (γ = 1.4, R = 297), which is the one preset where the atmosphere is also
+approximately right. Its Isp of 69 s is correct: real cold-gas thrusters land at 60–80 s.
 
 ### Things worth trying
 
 - Switch the nose to **flat** at Mach 2 and watch a detached bow shock stand off the face,
   with a subsonic pocket behind it. Then switch to **pointy** and watch it attach.
 - Take the vacuum nozzle down to sea level and watch the shock system walk *into* the bell.
-- Set γ = 1.2 and R = 350 and see how much further the plume expands.
+- Set γ back to 1.4 and R to 287 and watch the bow shock move *away* from the nose, and the
+  Isp fall by a fifth. Both are real consequences of the same knob — see below.
 - Move the measurement plane downstream and watch the thrust integral stop meaning thrust.
 
 ---
