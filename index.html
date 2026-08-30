@@ -220,6 +220,10 @@ const CONTROLS = [
    { k:'gammaA',   t:'Ambient γ',            min:1.1, max:1.7, step:0.01, v:1.4, rebuild:true,
      hint:'1.40 for air and for nitrogen; 1.29 for the CO₂ of Mars and Venus; about 1.43 for ' +
           'the hydrogen–helium of Jupiter.' },
+   { k:'gSurf',    t:'Surface gravity',      min:0, max:30, step:0.01, v:9.81, unit:'m/s²',
+     hint:'Set by the atmosphere buttons. It does two jobs: it is the weight a vertical climb ' +
+          'fights, and with R and T it fixes the scale height H = RT/g, which is how fast the ' +
+          'air thins out as you climb.' },
    { k:'RgasALog', t:'Ambient R',            min:2, max:3.6, step:0.002, v:2.458, log:true,
      unit:'J/kg·K', rebuild:true,
      hint:'Logarithmic, because the range is enormous: 191 for CO₂, 287 for air, 3748 for ' +
@@ -239,13 +243,19 @@ const CONTROLS = [
    { k:'propMassLog', t:'Propellant mass', min:-1, max:3, step:0.01, v:0, log:true, unit:'kg',
      hint:'Burn time follows from this and the mass flow, which the solver already measures, ' +
           'so there is nothing to set for consumption rate.' },
-   { k:'tPerMs',   t:'Flight time per flow ms', min:-3, max:3, step:0.05, v:-1.7, log:true,
-     unit:'s/ms',
-     hint:'The flow settles in about 2 ms; a burn lasts seconds. The default is set so the ' +
-          'airspeed barely moves while the flow is settling, which is the quasi-steady regime ' +
-          'the coupling assumes — and it means a whole burn is far too slow to sit and watch. ' +
-          'Raise it to see the bow shock build as the vehicle accelerates, and believe the ' +
-          'warning when it says the flow has stopped keeping up.' },
+   { k:'flightMode', t:'Flight path', min:0, max:1, step:1, v:0,
+     choices:['Level — gravity ignored','Vertical — climbing against gravity'],
+     hint:'Vertical adds the weight term to the acceleration and tracks altitude, and the ' +
+          'atmosphere then thins out as you climb: pressure falls as exp(−h/H) with ' +
+          'H = RT/g. So the nozzle you matched at the surface becomes under-expanded on the ' +
+          'way up, and drag falls away with the density.' },
+   { k:'ffLog',    t:'Trajectory fast-forward', min:0, max:6, step:0.05, v:1.3, log:true,
+     unit:'×',
+     hint:'1× is real time: one millisecond of flow is one millisecond of flight. But the ' +
+          'flow settles in about 2 ms and a burn lasts seconds, so at 1× nothing visible ever ' +
+          'happens. Above 1× the trajectory is fast-forwarded while the flow is treated as ' +
+          'quasi-steady — legitimate only while the airspeed moves slowly compared with how ' +
+          'fast the flow settles, which the panel checks and flags in red.' },
  ]},
  { group:'Fluid', items:[
    { k:'visc',     t:'Kinematic viscosity',  min:0, max:1, step:0.0001, v:0.0151, unit:'mm²/ms',
@@ -306,7 +316,17 @@ const OPT = { autoPace:true, format:'mp4' };
 const G0 = 9.80665;
 
 /* ========================== environment & chamber ========================== */
-const pAmbPa = () => Math.pow(10, P.pAmbLog) * 1000;
+/* Isothermal exponential atmosphere. The scale height is not a separate input: H = RT/g
+   falls out of the gas constant, the temperature and the gravity already set, and it
+   reproduces the published scale height of every world here to within a few percent —
+   8.4 km for Earth, 10.8 for Mars, 15.9 for Venus, 21 for Titan. */
+const scaleHeight = () => Math.pow(10, P.RgasALog) * P.tAmb / Math.max(P.gSurf, 1e-9);
+const climbing = () => P.accelerate === 1 && P.flightMode === 1;
+function pAmbPa(){
+  const p0 = Math.pow(10, P.pAmbLog) * 1000;      // the slider is the pressure the run starts at
+  if (!climbing() || P.gSurf <= 0) return p0;
+  return p0 * Math.exp(-S.alt / scaleHeight());
+}
 const R_UNIVERSAL = 8314.462618;                 // J/(kmol K), so R = R_u / M with M in g/mol
 const molarMass = R => R_UNIVERSAL / R;
 
@@ -446,7 +466,9 @@ function derived(){
   const massNow = dryMass() + (P.accelerate ? S.propLeft : propMass());
   const Fmeas = m ? m.thrust : thrust, Dmeas = m ? m.drag : 0;
   const netF = Fmeas - Dmeas;
-  const accel = netF / Math.max(massNow, 1e-9);
+  const gUse = climbing() ? P.gSurf : 0;
+  const accel = netF / Math.max(massNow, 1e-9) - gUse;    // weight included on a vertical climb
+  const twr = netF / Math.max(massNow * Math.max(P.gSurf, 1e-9), 1e-9);
   const ispUse = mdotUse > 0 ? Fmeas / (mdotUse * G0) : 0;
   // Tsiolkovsky on the measured exhaust velocity: propulsion only, no drag or gravity loss
   const deltaV = ispUse * G0 * Math.log(massFull / Math.max(dryMass(), 1e-9));
@@ -455,7 +477,8 @@ function derived(){
            halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax, rhoE,
            Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
            machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
-           burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas };
+           burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas,
+           twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog) };
 }
 
 
@@ -473,18 +496,18 @@ const PROPELLANTS = [
    roughly that temperature. */
 const LOG10 = Math.log10;
 const ATMOSPHERES = [
- { n:'Earth',   d:'N2/O2 · 101 kPa · 288 K',
-   p:{ gammaA:1.40, RgasALog:LOG10(287.0),  pAmbLog:LOG10(101.325), tAmb:288 } },
- { n:'Mars',    d:'96% CO2 · 0.64 kPa · 210 K',
-   p:{ gammaA:1.29, RgasALog:LOG10(191.8),  pAmbLog:LOG10(0.636),   tAmb:210 } },
- { n:'Venus',   d:'96% CO2 · 9.2 MPa · 737 K',
-   p:{ gammaA:1.29, RgasALog:LOG10(191.4),  pAmbLog:LOG10(9200),    tAmb:737 } },
- { n:'Jupiter', d:'H2/He · 1 bar level · 165 K',
-   p:{ gammaA:1.43, RgasALog:LOG10(3748),   pAmbLog:LOG10(100),     tAmb:165 } },
- { n:'Titan',   d:'95% N2 · 147 kPa · 94 K',
-   p:{ gammaA:1.40, RgasALog:LOG10(304.6),  pAmbLog:LOG10(146.7),   tAmb:94 } },
- { n:'Vacuum',  d:'10 Pa — the solver\u2019s floor',
-   p:{ pAmbLog:-2 } },
+ { n:'Earth',   d:'N2/O2 · 101 kPa · 288 K · 9.81 m/s²',
+   p:{ gammaA:1.40, RgasALog:LOG10(287.0),  pAmbLog:LOG10(101.325), tAmb:288, gSurf:9.81 } },
+ { n:'Mars',    d:'96% CO2 · 0.64 kPa · 210 K · 3.72 m/s²',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.8),  pAmbLog:LOG10(0.636),   tAmb:210, gSurf:3.72 } },
+ { n:'Venus',   d:'96% CO2 · 9.2 MPa · 737 K · 8.87 m/s²',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.4),  pAmbLog:LOG10(9200),    tAmb:737, gSurf:8.87 } },
+ { n:'Jupiter', d:'H2/He · 1 bar level · 165 K · 24.8 m/s²',
+   p:{ gammaA:1.43, RgasALog:LOG10(3748),   pAmbLog:LOG10(100),     tAmb:165, gSurf:24.79 } },
+ { n:'Titan',   d:'95% N2 · 147 kPa · 94 K · 1.35 m/s²',
+   p:{ gammaA:1.40, RgasALog:LOG10(304.6),  pAmbLog:LOG10(146.7),   tAmb:94,  gSurf:1.35 } },
+ { n:'Vacuum',  d:'10 Pa, no gravity — the solver\u2019s floor',
+   p:{ pAmbLog:-2, gSurf:0 } },
 ];
 
 const PRESETS = [
@@ -522,7 +545,7 @@ const S = {
   series:[], peak:0, peakT:-1,
   spfAuto:32, wallSmooth:16, simRate:0, diverged:false,
   colourScale:1, meas:null,
-  flightT:0, vFlight:0, propLeft:0, shutT:-1,      // trajectory state, in seconds and kg
+  flightT:0, vFlight:0, propLeft:0, shutT:-1, alt:0, apogee:false,   // trajectory state
 };
 var FIXED_DT = null, EXPORTING = false;
 
@@ -541,6 +564,7 @@ function buildGrid(){
 function resetSim(){
   S.t = 0; S.dt = 0.001;
   S.flightT = 0; S.vFlight = P.vAmb; S.propLeft = propMass(); S.shutT = -1;
+  S.alt = 0; S.apogee = false;
   S.series.length = 0; S.peak = 0; S.peakT = -1; S.vmax = 1; S.meas = null;
   S.diverged = false;
   const d = document.getElementById('diverged');
@@ -668,6 +692,28 @@ function updateMetrics(){
     `A flat nose at Mach ${fmt(D.machInf,2)} gives a detached bow shock and a subsonic pocket ` +
     `that costs a lot of drag. It is the cheapest way to see a bow shock, and the worst way to fly.`]);
 
+  if (S.shutT >= 0) flags.push(['warn',
+    `<b>Burnout — the engine is off.</b> The tanks ran dry at ${fmt(S.shutT,2)} ms of flow ` +
+    `time and the chamber has been ramped back down to ambient. The exit-plane integral is ` +
+    `<b>no longer thrust</b>: with no flow of its own, the nozzle is an open pipe that ambient ` +
+    `gas is being dragged through, so the integral reads a small momentum deficit — a few ` +
+    `newtons, negative. That is internal drag on a dead engine, and it is correct. The vehicle ` +
+    `is now coasting and slowing under its own drag.`]);
+  else if (m.thrust < 0) flags.push(['warn',
+    `<b>Negative thrust.</b> The exit-plane integral has gone below zero, which means more ` +
+    `axial momentum is entering the nozzle than leaving it. That is what an unfired or ` +
+    `unchoked nozzle does in a freestream — it acts as an inlet, not a nozzle. Check the ` +
+    `chamber pressure against the critical ratio above.`]);
+  if (climbing() && D.twr < 1) flags.push(['bad',
+    `<b>It will not lift off.</b> Thrust-to-weight is ${fmt(D.twr,2)}: the vehicle weighs ` +
+    `${fmt(D.massNow * P.gSurf,0)} N and the net axial force is ${fmt(D.netF,0)} N. On a ` +
+    `vertical path it simply sits there. Raise the chamber pressure or the throat radius, or ` +
+    `drop some mass.`]);
+  if (S.apogee) flags.push(['bad',
+    `<b>Apogee — the climb has stopped.</b> Weight and drag have taken the airspeed to zero. ` +
+    `A real vehicle would now fall back, but the solver only knows how to fly nose-first into ` +
+    `the freestream, so the trajectory is held at zero rather than reversed. Everything after ` +
+    `this point is meaningless.`]);
   flags.push(['warn',
     `<b>Drag is pressure drag only.</b> It is the (p − p_ambient) integral over the nose, the ` +
     `body and the base annulus, which at supersonic speed is the term that actually responds ` +
@@ -675,16 +721,22 @@ function updateMetrics(){
     `this cell size, so any wall-shear number would be a function of the grid rather than of ` +
     `the flow. Expect real total drag to be higher, by roughly a third on a slender body.`]);
   if (P.accelerate){
-    // quasi-steady check: how much does the airspeed move while the flow is still settling?
-    const settleMs = 2.0, dv = Math.abs(D.accel) * settleMs * Math.pow(10, P.tPerMs);
-    const frac = dv / Math.max(D.vInf, D.aAmb);
+    /* Quasi-steady check. The flow needs roughly 2 ms to settle; if the boundary conditions
+       move appreciably in that window, thrust and drag are being read off a flow field that is
+       chasing a target it never reaches. Velocity and ambient pressure both count. */
+    const settleS = 2.0e-3 * D.ff;
+    const dv = Math.abs(D.accel) * settleS;
+    const fV = dv / Math.max(D.vInf, D.aAmb);
+    const fP = climbing() ? (D.vInf * settleS) / Math.max(D.H, 1e-9) : 0;
+    const frac = Math.max(fV, fP);
     if (frac > 0.05) flags.push(['bad',
-      `<b>The flow cannot keep up with the trajectory.</b> At ${fmt(Math.pow(10,P.tPerMs),3)} s ` +
-      `of flight per flow millisecond the airspeed moves ${fmt(dv,0)} m/s — ${fmt(frac*100,0)}% ` +
-      `of the airspeed — in the ~2 ms the flow needs to settle. The quasi-steady coupling ` +
-      `assumes the opposite, ` +
-      `so thrust and drag are being read off a flow field that is chasing a boundary condition ` +
-      `it never reaches. Lower <b>flight time per flow ms</b>.`]);
+      `<b>The flow cannot keep up with the trajectory.</b> Fast-forwarding ${fmt(D.ff,0)}× means ` +
+      `${fmt(settleS,2)} s of flight pass in the ~2 ms the flow needs to settle, and in that ` +
+      `window the airspeed moves ${fmt(dv,0)} m/s` +
+      (fP > fV ? ` and the ambient pressure changes by ${fmt(fP*100,0)}%` : '') +
+      ` — ${fmt(frac*100,0)}% of what the flow is sensitive to. The quasi-steady coupling ` +
+      `assumes the opposite, so treat this as a demonstration rather than a result. Lower ` +
+      `<b>trajectory fast-forward</b>.`]);
   }
   flags.push(['warn',
     `<b>Two gases, both calorically perfect.</b> Exhaust is γ ${fmt(D.g,2)} / M ` +
@@ -738,7 +790,9 @@ function updateMetrics(){
       ['ambient pressure', fmtP(D.pa)],
       ['ambient density',  fmt(D.rhoAmb,4) + ' kg/m³'],
       ['sound speed',      fmt(D.aAmb,0) + ' m/s'],
-      ['freestream',       fmt(P.vAmb,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
+      ['surface gravity',  fmt(P.gSurf,2) + ' m/s²'],
+      ['scale height',     P.gSurf > 0 ? fmt(D.H/1000,1) + ' km' : '— (no gravity)'],
+      ['freestream',       fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
     ]) + '<hr>' +
     rows(`Measured at ${P.probe > 0 ? fmt(P.probe,0) + ' mm past the exit' : 'the exit plane'}`, [
       ['on-axis u_z',   fmt(m.axis,0) + ' m/s'],
@@ -756,17 +810,22 @@ function updateMetrics(){
       ['pressure drag',  fmt(m.drag,1) + ' N'],
       ['net axial force',fmt(m.net,1) + ' N'],
     ]) + '<hr>' +
-    rows('Flight', [
+    rows('Flight' + (P.accelerate ? (climbing() ? ' — vertical' : ' — level') : ' — not flying'), [
       ['airspeed',      fmt(D.vInf,0) + ' m/s (M ' + fmt(D.machInf,2) + ')'],
       ['mass now',      fmt(D.massNow,2) + ' kg of ' + fmt(D.massFull,2)],
       ['propellant flow',fmt(D.mdotUse*1000,1) + ' g/s'],
       ['burn time',     Number.isFinite(D.burnTime) ? fmt(D.burnTime,2) + ' s' : '—'],
-      ['acceleration',  fmt(D.accel,1) + ' m/s² (' + fmt(D.accel/G0,2) + ' g)'],
+      ['thrust / weight',fmt(D.twr,2)],
+      ['acceleration',  fmt(D.accel,1) + ' m/s² (' + fmt(D.accel/G0,2) + ' g)' +
+                        (D.gUse > 0 ? ' after weight' : '')],
       ['Isp, measured', fmt(D.mdotUse > 0 ? D.Fmeas/(D.mdotUse*G0) : 0,0) + ' s'],
       ['Δv, ideal',     fmt(D.deltaV,0) + ' m/s'],
     ] .concat(P.accelerate ? [
-      ['flight time',   fmt(S.flightT,2) + ' s'],
+      ['flight time T+', fmt(S.flightT,2) + ' s  (' + fmt(D.ff,0) + '× flow)'],
       ['propellant left',fmt(100*S.propLeft/Math.max(propMass(),1e-9),0) + '%'],
+    ] : []).concat(climbing() ? [
+      ['altitude gained',fmt(S.alt/1000,2) + ' km'],
+      ['ambient now',   fmt(100*D.pa/(Math.pow(10,P.pAmbLog)*1000),0) + '% of start'],
     ] : [])) +
     rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
   markActiveQuality();
@@ -1803,16 +1862,26 @@ function compSteps(n){
 }
 
 /* Quasi-steady trajectory coupling. The flow settles in about 2 ms and a burn lasts seconds,
-   so the two clocks are separated by three or four orders of magnitude and the ratio is a
-   control rather than something to derive. Thrust and drag come from the last readback, which
-   makes this an explicit step lagged by a frame — harmless at this ratio. Axial forces only:
-   no gravity, no flight-path angle. */
+   so the two clocks are separated by orders of magnitude: the trajectory is integrated on its
+   own clock and the fast-forward factor between them is a control rather than something to
+   derive. Thrust and drag come from the last readback, which makes this an explicit step
+   lagged by a frame — harmless at this ratio.
+
+   Level flight is the axial force balance alone. Vertical adds weight and tracks altitude,
+   which feeds back into the ambient pressure through the scale height. */
 function advanceFlight(simmedMs){
   const m = S.meas;
   if (!m) return;
-  const dtF = simmedMs * Math.pow(10, P.tPerMs);          // ms of flow -> s of flight
+  const dtF = simmedMs * 1e-3 * Math.pow(10, P.ffLog);   // ms of flow -> s of flight
   const mass = Math.max(dryMass() + S.propLeft, 1e-6);
-  S.vFlight = Math.max(0, S.vFlight + (m.net / mass) * dtF);
+  const g = climbing() ? P.gSurf : 0;
+  const v = S.vFlight + (m.net / mass - g) * dtF;
+  // Nose-first is the only attitude the solver can represent, so the climb stops at apogee
+  // rather than turning over and falling back tail-first. It has to have been climbing first:
+  // a vehicle still sitting on the pad is at zero for a quite different reason.
+  if (climbing() && S.vFlight > 1 && v <= 0) S.apogee = true;
+  S.vFlight = Math.max(0, v);
+  if (climbing()) S.alt = Math.max(0, S.alt + S.vFlight * dtF);
   if (S.propLeft > 0){
     S.propLeft = Math.max(0, S.propLeft - Math.max(m.mdot, 0) * dtF);
     if (S.propLeft <= 0 && S.shutT < 0) S.shutT = S.t;    // note the flow time of burnout
@@ -1948,7 +2017,7 @@ function drawPlot(){
   pctx.clearRect(0,0,w,h);
   DOM.plotTitle.textContent =
     `axial velocity at the measurement plane, ${P.probe > 0 ? fmt(P.probe,0) + ' mm past the ' : 'at the '}` +
-    `nozzle exit   —   on-axis (cyan) and plane maximum (orange)`;
+    `nozzle exit, against flow time   —   on-axis (cyan) and plane maximum (orange)`;
 
   const ser = S.series;
   if (ser.length < 2) return;
@@ -2456,10 +2525,12 @@ function drawOverlay(cx, w, h, headerH, simH, footerH, sc){
   cx.textAlign = 'left';
   const pad = Math.round(10 * sc);
   const Dv = derived(), mm = S.meas;
-  cx.fillText(`t = ${S.t.toFixed(2)} ms` +
+  cx.fillText(`flow t = ${S.t.toFixed(2)} ms` +
               (mm ? `    thrust ${fmt(mm.thrust,0)} N    drag ${fmt(mm.drag,0)} N` +
                     `    net ${fmt(mm.net,0)} N` : '') +
-              (P.accelerate ? `    v ${fmt(Dv.vInf,0)} m/s    ${fmt(Dv.accel/G0,1)} g` : ''),
+              (P.accelerate ? `    flight T+${fmt(S.flightT,2)} s    v ${fmt(Dv.vInf,0)} m/s` +
+                              `    ${fmt(Dv.accel/G0,1)} g` +
+                              (climbing() ? `    +${fmt(S.alt/1000,2)} km` : '') : ''),
               pad, headerH * 0.32);
   cx.fillStyle = '#8b97a6';
   cx.font = `${Math.round(11 * sc)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
@@ -2805,6 +2876,13 @@ document.getElementById('note').innerHTML =
    fraction wherever they meet, so the plume boundary is a real jump in molecular weight and
    not just in temperature. Pick them with the <b>Propellant</b> and <b>Atmosphere</b>
    buttons.<br><br>
+   <b>Two clocks, and they are different.</b> <b>Flow time</b>, in milliseconds, is the gas
+   dynamics: how much of the flow has been simulated. It is the <i>t</i> in the readout, the
+   axis of the plot, and what the solver is actually integrating. <b>Flight time</b>, in
+   seconds, is the trajectory: where the vehicle is in its burn. The flow settles in about
+   2 ms and a burn lasts seconds, so at real time nothing visible would ever happen — the
+   trajectory is therefore fast-forwarded by the factor shown next to it, and the readout
+   always states it. They tick at the same rate only at 1×.<br><br>
    <b>What it does not model.</b> Chemistry. Specific heats are constant, so there is no
    dissociation in the chamber and no recombination as the flow expands — this is the frozen
    limit, and a real nozzle recovers some performance that this does not. No combustion, no
@@ -2830,7 +2908,7 @@ const URLKEY = {
   pAmbLog:'pa', tAmb:'ta', vAmb:'va',
   gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',
   visc:'nu', smag:'cs', dyeDiss:'dd',
-  accelerate:'ac', dryMassLog:'dm', propMassLog:'pm', tPerMs:'tp',
+  accelerate:'ac', flightMode:'fm', dryMassLog:'dm', propMassLog:'pm', ffLog:'ff', gSurf:'gs',
   downrange:'dn', rDomain:'rd', zAspect:'za', res:'rs', cfl:'cf', budget:'bg', spf:'sp',
   probe:'pb',
   vidFlight:'vf', vidMsPerFrame:'vm', vidFps:'vr', vidWidth:'vw', vidMbps:'vb',
@@ -3025,19 +3103,27 @@ function frame(){
   const steps = OPT.autoPace ? Math.max(1, Math.round(S.spfAuto)) : P.spf;
   const C = chamberState(S.t), mm = S.meas;
   const D0 = derived();
+  /* Two clocks, and they are not the same thing, so both are named every time they appear.
+     FLOW time is the CFD clock: how much gas dynamics has been simulated, milliseconds.
+     FLIGHT time is the trajectory clock: how far along the burn the vehicle is, seconds.
+     They advance together only at 1x fast-forward. */
   hud.textContent =
-    `t = ${S.t.toFixed(3)} ms   dt = ${(S.dt*1e6).toFixed(2)} ns   ` +
+    `flow t = ${S.t.toFixed(3)} ms   dt = ${(S.dt*1e6).toFixed(2)} ns   ` +
     `max Mach ${CP.machMax.toFixed(2)}   peak |u| ${S.vmax.toFixed(0)} m/s\n` +
     `chamber ${(C.p/1e5).toFixed(2)} bar   ${C.T.toFixed(0)} K` +
-    (S.shutT >= 0 ? '   ○ burnout' : S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') + `\n` +
+    (S.shutT >= 0 ? '   ○ burnt out, coasting' : S.t < P.riseMs ? '   ▲ ramping' : '   ■ steady') +
+    `   M∞ ${D0.machInf.toFixed(2)}\n` +
     `thrust ${mm ? mm.thrust.toFixed(0) : '—'} N   drag ${mm ? mm.drag.toFixed(0) : '—'} N   ` +
-    `net ${mm ? mm.net.toFixed(0) : '—'} N   ` +
+    `net ${mm ? mm.net.toFixed(0) : '—'} N` +
+    (mm && mm.thrust < 0 ? '  (engine off: inlet drag, not thrust)' : '') + `\n` +
     (P.accelerate
-      ? `v ${D0.vInf.toFixed(0)} m/s   a ${(D0.accel/G0).toFixed(1)} g   ` +
-        `T+${S.flightT.toFixed(2)} s   prop ${(100*S.propLeft/Math.max(propMass(),1e-9)).toFixed(0)}%`
-      : `M∞ ${D0.machInf.toFixed(2)}`) + `\n` +
+      ? `flight T+${S.flightT.toFixed(2)} s   = flow t \u00d7 ${D0.ff.toFixed(0)} fast-forward\n` +
+        `   v ${D0.vInf.toFixed(0)} m/s   a ${(D0.accel/G0).toFixed(1)} g` +
+        (climbing() ? `   alt +${(S.alt/1000).toFixed(2)} km` : '   level flight') +
+        `   prop ${(100*S.propLeft/Math.max(propMass(),1e-9)).toFixed(0)}%\n`
+      : ``) +
     `${fps.toFixed(0)} fps   ${steps} steps/frame   ` +
-    `${S.simRate.toFixed(2)} ms of flight per second   ` +
+    `${S.simRate.toFixed(2)} ms of flow per wall second   ` +
     `${(steps*7).toLocaleString()} dispatches/frame, 1 submit`;
 
   requestAnimationFrame(frame);
