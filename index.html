@@ -107,9 +107,10 @@
 </div>
 <div id="panel">
   <h1>Rocket Sim</h1>
-  <div class="sub">Axisymmetric (r–z) compressible Navier–Stokes. A hot-gas injector feeds a
-  combustion chamber and a parametric converging–diverging nozzle; the vehicle flies nose-first
-  into a freestream of your choosing. The view is a slice through the axis.</div>
+  <div class="sub">Axisymmetric (r–z) compressible Navier–Stokes, two species. A hot-gas
+  injector feeds a combustion chamber and a parametric converging–diverging nozzle; the
+  vehicle flies nose-first through an atmosphere of your choosing, and exhaust and atmosphere
+  are genuinely different gases. The view is a slice through the axis.</div>
   <div class="btnrow">
     <button id="fire" class="primary">Ignite ⏎</button>
     <button id="pause">Pause</button>
@@ -149,9 +150,6 @@ const CONTROLS = [
      hint:'Stagnation pressure held at the injector face. The nozzle chokes above the critical ' +
           'ratio — 1.77× ambient at γ = 1.2, 1.89× at γ = 1.4, and the panel shows the live ' +
           'figure. Everything downstream scales with the ratio, not with the value.' },
-   { k:'Tc',      t:'Chamber temperature',   min:300, max:4000,step:25,  v:3000, unit:'K',
-     hint:'Stagnation temperature of the injected gas. Sets the sound speed, and with it both ' +
-          'the exhaust velocity and the timestep.' },
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
      hint:'Chamber conditions ramp from ambient to full over this long, smoothstep in time. ' +
           'A step change is legal but launches a much stronger starting shock.' },
@@ -160,11 +158,24 @@ const CONTROLS = [
      hint:'Only the gas dynamics are modelled — no injector elements, no combustion, no ' +
           'characteristic length. The head end is simply held at stagnation conditions.' },
  ]},
+ { group:'Propellant', open:true, items:[
+   { kind:'buttons', t:'Exhaust gas', opts:'PROPELLANTS',
+     hint:'Flame temperature and exhaust composition for a stoichiometric-ish mixture at a ' +
+          'few tens of bar. There is no chemistry here: these just set what gas comes out of ' +
+          'the injector and how hot it is.' },
+   { k:'Tc',      t:'Chamber temperature',   min:100, max:4000,step:5,   v:3570, unit:'K', rebuild:true,
+     hint:'Stagnation temperature at the injector. A propellant property — the buttons set it.' },
+   { k:'gammaE',  t:'Exhaust γ',             min:1.1, max:1.67,step:0.01,v:1.24, rebuild:true,
+     hint:'Ratio of specific heats of the combustion products. 1.2 to 1.25 for most bipropellants.' },
+   { k:'RgasE',   t:'Exhaust R',             min:150, max:800, step:1,   v:375,  unit:'J/kg·K', rebuild:true,
+     hint:'8314 / molecular weight. Low molecular weight is the whole reason hydrogen is worth ' +
+          'the tankage: it is what puts R, and therefore exhaust velocity, up.' },
+ ]},
  { group:'Nozzle', open:true, items:[
    { k:'throatR',  t:'Throat radius',        min:1,  max:40,  step:0.25, v:8,    unit:'mm', rebuild:true,
      hint:'The single most important number here. Mass flow is proportional to throat area ' +
           'once choked, and the grid needs ≳6 cells across the throat radius to mean anything.' },
-   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:15.25,unit:'mm', rebuild:true,
+   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:14.75,unit:'mm', rebuild:true,
      hint:'With the throat, this fixes the expansion ratio and therefore the design altitude.' },
    { k:'convLen',  t:'Converging length',    min:2,  max:120, step:1,    v:20,   unit:'mm', rebuild:true,
      hint:'Contour is a raised cosine, so it meets both the chamber wall and the throat with ' +
@@ -190,25 +201,30 @@ const CONTROLS = [
    { k:'wallT',    t:'Wall thickness',       min:0.5,max:20,  step:0.5,  v:3,    unit:'mm', rebuild:true,
      hint:'Body radius is max(chamber, nozzle exit) + this, so the base is always an annulus.' },
  ]},
- { group:'Environment', open:true, items:[
-   { k:'pAmbLog',  t:'Ambient pressure',     min:-2, max:2.1, step:0.05, v:2,    log:true, unit:'kPa',
-     hint:'Logarithmic: 100 kPa is sea level, 26 kPa ≈ 10 km, 1 kPa ≈ 31 km, 0.01 kPa ≈ 65 km. ' +
-          'The nozzle is only right at one of these.' },
-   { k:'tAmb',     t:'Ambient temperature',  min:150,max:330, step:1,    v:288,  unit:'K',
-     hint:'Sets ambient density and sound speed, and therefore the freestream Mach number.' },
+ { group:'Atmosphere', open:true, items:[
+   { kind:'buttons', t:'Ambient gas', opts:'ATMOSPHERES',
+     hint:'Composition, surface pressure and surface temperature. The exhaust is a separate ' +
+          'gas, so the contact surface between plume and atmosphere is a real jump in ' +
+          'molecular weight, not just in temperature.' },
+   { k:'pAmbLog',  t:'Ambient pressure',     min:-2, max:4,   step:0.002, v:2.006, log:true, unit:'kPa',
+     hint:'Logarithmic, from 10 Pa to 10 MPa: Mars surface is 0.64 kPa, Earth 101, Titan 147, ' +
+          'Venus surface 9200. The nozzle is only right at one of them.' },
+   { k:'tAmb',     t:'Ambient temperature',  min:60, max:800, step:1,    v:288,  unit:'K',
+     hint:'With the gas constant this fixes ambient density and sound speed, and therefore the ' +
+          'freestream Mach number.' },
    { k:'vAmb',     t:'Ambient air speed',    min:0,  max:1500,step:5,    v:0,    unit:'m/s',
-     hint:'Flight speed. In the vehicle frame this is air entering at the nose and washing ' +
-          'down the body into the base region, where it shears against the plume.' },
+     hint:'Flight speed. In the vehicle frame this is atmosphere entering at the nose and ' +
+          'washing down the body into the base region, where it shears against the plume.' },
+   { k:'gammaA',   t:'Ambient γ',            min:1.1, max:1.7, step:0.01, v:1.4, rebuild:true,
+     hint:'1.40 for air and for nitrogen; 1.29 for the CO₂ of Mars and Venus; about 1.43 for ' +
+          'the hydrogen–helium of Jupiter.' },
+   { k:'RgasALog', t:'Ambient R',            min:2, max:3.6, step:0.002, v:2.458, log:true,
+     unit:'J/kg·K', rebuild:true,
+     hint:'Logarithmic, because the range is enormous: 191 for CO₂, 287 for air, 3748 for ' +
+          'Jupiter\u2019s hydrogen. This is what makes a Jovian atmosphere so hard to fly a ' +
+          'rocket into and so easy to float a balloon in.' },
  ]},
- { group:'Gas', items:[
-   { k:'gamma',    t:'Ratio of specific heats γ', min:1.1, max:1.67, step:0.01, v:1.2,
-     hint:'ONE gas fills the whole domain, ambient and exhaust alike, so this is a choice ' +
-          'about which end to get right. The default 1.2 is rocket exhaust; air is 1.4. At 1.2 ' +
-          'the engine numbers are honest and the atmosphere is not — see below.' },
-   { k:'Rgas',     t:'Specific gas constant R', min:150, max:600, step:1, v:350, unit:'J/kg·K',
-     hint:'Default 350 is kerolox-like exhaust (hydrolox is nearer 690, off this slider); air ' +
-          'is 287. At 350 the modelled atmosphere is 18% less dense than real air at the same ' +
-          'pressure and temperature, which is the price of a correct plume.' },
+ { group:'Fluid', items:[
    { k:'visc',     t:'Kinematic viscosity',  min:0, max:1, step:0.0001, v:0.0151, unit:'mm²/ms',
      hint:'Air at 20 °C = 0.0151. Constant, not Sutherland — the boundary layers here are ' +
           'unresolved anyway.' },
@@ -257,10 +273,10 @@ const CONTROLS = [
 ];
 
 const P = {};
-for (const g of CONTROLS) for (const it of g.items) P[it.k] = it.v;
+for (const g of CONTROLS) for (const it of g.items) if (it.k) P[it.k] = it.v;
 const DEFAULTS = Object.assign({}, P);
 const SPEC = {};
-for (const g of CONTROLS) for (const it of g.items) SPEC[it.k] = it;
+for (const g of CONTROLS) for (const it of g.items) if (it.k) SPEC[it.k] = it;
 const VIEW = { field:0, gain:1, showGeom:true };
 const OPT = { autoPace:true, format:'mp4' };
 
@@ -268,33 +284,44 @@ const G0 = 9.80665;
 
 /* ========================== environment & chamber ========================== */
 const pAmbPa = () => Math.pow(10, P.pAmbLog) * 1000;
+const R_UNIVERSAL = 8314.462618;                 // J/(kmol K), so R = R_u / M with M in g/mol
+const molarMass = R => R_UNIVERSAL / R;
 
+/* The atmosphere. A different gas from the exhaust, which is the point. */
 function env(){
-  const g = P.gamma, Rg = P.Rgas, pa = pAmbPa(), Ta = P.tAmb;
+  const g = P.gammaA, Rg = Math.pow(10, P.RgasALog), pa = pAmbPa(), Ta = P.tAmb;
   const rhoA = pa / (Rg * Ta);
   const aA = Math.sqrt(g * Rg * Ta);
   return { g, Rg, pa, Ta, rhoA, aA, vInf:P.vAmb, machInf:P.vAmb / aA };
 }
+/* The exhaust. Everything inside the nozzle is this gas. */
+const exhaust = () => ({ g:P.gammaE, Rg:P.RgasE, cv:P.RgasE / (P.gammaE - 1) });
 
 /* The chamber is a plenum held at stagnation conditions, ramped in over `riseMs` so the
    run does not begin with a discontinuity the size of the pressure ratio. */
 function chamberState(t){
-  const E = env();
+  const E = env(), X = exhaust();
   const s = P.riseMs <= 0 ? 1 : Math.min(1, Math.max(0, t / P.riseMs));
   const sm = s * s * (3 - 2 * s);
   const p = E.pa + (P.pcBar * 1e5 - E.pa) * sm;
   const T = E.Ta + (P.Tc - E.Ta) * sm;
-  return { p, T, rho: p / (E.Rg * T) };
+  return { p, T, rho: p / (X.Rg * T) };            // the plenum holds exhaust, not atmosphere
 }
 
 /* ========================== geometry ==========================
    Everything the shaders need to draw and to classify a point, computed once per rebuild
    so the JS metrics and the GPU geometry cannot drift apart. */
 const GEO = {};
+/* The two radii the sliders cannot be allowed to contradict: a throat wider than the
+   chamber, or an exit narrower than the throat. Derived from P rather than from GEO so the
+   panel tracks a slider being dragged, before the grid has been rebuilt. */
+function nozzleRadii(){
+  const rt = Math.min(P.throatR, P.chamR - 0.5);
+  return { rt, re: Math.max(P.nozExitR, rt) };
+}
 function computeGeometry(){
   const noseLen  = (P.noseType === 0) ? 0 : P.noseLen;
-  const throatR  = Math.min(P.throatR, P.chamR - 0.5);
-  const nozExitR = Math.max(P.nozExitR, throatR);
+  const { rt: throatR, re: nozExitR } = nozzleRadii();
   const bodyR    = Math.max(P.chamR, nozExitR) + P.wallT;
   const vehLen   = noseLen + P.foreLen + P.chamLen + P.convLen + P.divLen;
 
@@ -334,8 +361,10 @@ const machFromPressureRatio = (p0OverP, g) =>
   Math.sqrt(Math.max(0, 2 / (g - 1) * (Math.pow(p0OverP, (g - 1) / g) - 1)));
 
 function derived(){
-  const E = env(), g = E.g, Rg = E.Rg;
-  const rt = GEO.throatR || P.throatR, re = GEO.nozExitR || P.nozExitR;
+  // The nozzle flows pure exhaust, so all of the 1-D theory uses the exhaust gas. The
+  // atmosphere enters only as the back pressure it has to expand against.
+  const E = env(), X = exhaust(), g = X.g, Rg = X.Rg;
+  const { rt, re } = nozzleRadii();
   const At = Math.PI * rt * rt, Ae = Math.PI * re * re;      // mm²
   const eps = Ae / At;
   const pc = P.pcBar * 1e5, Tc = P.Tc;
@@ -374,32 +403,69 @@ function derived(){
   const cp = g * Rg / (g - 1);
   const vMax = Math.sqrt(2 * cp * Tc);
 
+  // density of the exhaust at the exit plane, against the atmosphere it is pushing into
+  const rhoE = pe / (Rg * Te);
   return { g, Rg, rt, re, At, Ae, eps, pc, Tc, pa:E.pa, choked, critical,
            Me, pe, Te, ve, peRatio, mdot, thrust, cf, isp, cstar,
-           halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax,
+           halfAngle, lambda, MeOpt, epsOpt, reOpt, vMax, rhoE,
+           Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
            machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA };
 }
 
 
+/* Exhaust compositions at roughly optimum mixture ratio and a few tens of bar. R is
+   8314.46 / M; the flame temperatures are the usual textbook figures. */
+const PROPELLANTS = [
+ { n:'Kerolox',    d:'RP-1/LOX · M 22.2 · 3570 K',  p:{ gammaE:1.24, RgasE:375, Tc:3570 } },
+ { n:'Hydrolox',   d:'LH2/LOX · M 12.0 · 3400 K',   p:{ gammaE:1.22, RgasE:693, Tc:3400 } },
+ { n:'Methalox',   d:'CH4/LOX · M 20.5 · 3540 K',   p:{ gammaE:1.20, RgasE:406, Tc:3540 } },
+ { n:'Hypergolic', d:'N2O4/MMH · M 21.5 · 3200 K',  p:{ gammaE:1.23, RgasE:387, Tc:3200 } },
+ { n:'Solid',      d:'APCP · M 27.0 · 3200 K',      p:{ gammaE:1.18, RgasE:308, Tc:3200 } },
+ { n:'Cold gas',   d:'N2, unheated · M 28.0 · 290 K',p:{ gammaE:1.40, RgasE:297, Tc:290 } },
+];
+/* Surface (or 1-bar-level) conditions. Composition-weighted M, and gamma for the mixture at
+   roughly that temperature. */
+const LOG10 = Math.log10;
+const ATMOSPHERES = [
+ { n:'Earth',   d:'N2/O2 · 101 kPa · 288 K',
+   p:{ gammaA:1.40, RgasALog:LOG10(287.0),  pAmbLog:LOG10(101.325), tAmb:288 } },
+ { n:'Mars',    d:'96% CO2 · 0.64 kPa · 210 K',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.8),  pAmbLog:LOG10(0.636),   tAmb:210 } },
+ { n:'Venus',   d:'96% CO2 · 9.2 MPa · 737 K',
+   p:{ gammaA:1.29, RgasALog:LOG10(191.4),  pAmbLog:LOG10(9200),    tAmb:737 } },
+ { n:'Jupiter', d:'H2/He · 1 bar level · 165 K',
+   p:{ gammaA:1.43, RgasALog:LOG10(3748),   pAmbLog:LOG10(100),     tAmb:165 } },
+ { n:'Titan',   d:'95% N2 · 147 kPa · 94 K',
+   p:{ gammaA:1.40, RgasALog:LOG10(304.6),  pAmbLog:LOG10(146.7),   tAmb:94 } },
+ { n:'Vacuum',  d:'10 Pa — the solver\u2019s floor',
+   p:{ pAmbLog:-2 } },
+];
+
 const PRESETS = [
- { n:'Sea-level booster', d:'ε ≈ 3.6, matched to 100 kPa',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:15.25, divLen:25, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Vacuum upper stage', d:'ε ≈ 40 at 1 kPa — under-expanded, as real ones are',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:0, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Over-expanded', d:'the vacuum bell at sea level',
-   p:{ pcBar:20, Tc:3000, throatR:8, nozExitR:50.5, divLen:110, convLen:20, nozShape:1,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
- { n:'Under-expanded', d:'stubby nozzle, shock diamonds',
-   p:{ pcBar:60, Tc:3000, throatR:8, nozExitR:10, divLen:12, convLen:20, nozShape:0,
-       pAmbLog:2, vAmb:0, gamma:1.2, Rgas:350 } },
+ { n:'Sea-level booster', d:'kerolox on Earth, ε 3.4 — matched',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:14.75, convLen:20, divLen:25, nozShape:1, noseType:2 } },
+ { n:'Vacuum upper stage', d:'hydrolox, ε 40 at 1 kPa — Isp 430 s',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:2.458, pAmbLog:0, tAmb:250, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Over-expanded', d:'that vacuum bell at sea level',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Under-expanded', d:'stubby kerolox at 60 bar, shock diamonds',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288, vAmb:0,
+       pcBar:60, throatR:8, nozExitR:10, convLen:20, divLen:12, nozShape:0, noseType:2 } },
  { n:'Supersonic flight', d:'Mach 2 at 10 km, base flow',
-   p:{ pcBar:40, Tc:3000, throatR:8, nozExitR:24, divLen:55, convLen:20, nozShape:1,
-       pAmbLog:1.4, tAmb:223, vAmb:600, noseType:1, gamma:1.2, Rgas:350 } },
- { n:'Cold gas thruster', d:'nitrogen, no combustion — γ and R are air-like again',
-   p:{ pcBar:10, Tc:300, throatR:8, nozExitR:23, divLen:45, convLen:20, nozShape:1,
-       pAmbLog:1, vAmb:0, gamma:1.4, Rgas:297 } },
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:1.4, tAmb:223, vAmb:600,
+       pcBar:40, throatR:8, nozExitR:24, convLen:20, divLen:55, nozShape:1, noseType:1 } },
+ { n:'Mars ascent', d:'methalox into 0.64 kPa of CO₂',
+   p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.29, RgasALog:LOG10(191.8), pAmbLog:LOG10(0.636), tAmb:210, vAmb:0,
+       pcBar:20, throatR:8, nozExitR:50.5, convLen:20, divLen:110, nozShape:1, noseType:2 } },
+ { n:'Venus surface', d:'92 bar back pressure — the nozzle is a hole',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.29, RgasALog:LOG10(191.4), pAmbLog:LOG10(9200), tAmb:737, vAmb:0,
+       pcBar:250, throatR:8, nozExitR:8.25, convLen:20, divLen:12, nozShape:1, noseType:2 } },
+ { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
+   p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
+       pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
 ];
 
 /* ========================== simulation state ========================== */
@@ -451,12 +517,12 @@ function probeIz(){
    thrust. */
 function consumeProbeArr(buf, t){
   const pa = pAmbPa(), rLim = GEO.nozExitR;
-  let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0;
+  let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0, Taxis = 0, Yaxis = 0;
   for (let ir = 0; ir < S.Nr; ir++){
     const uz = buf[ir*8], rho = buf[ir*8+1], pr = buf[ir*8+2],
-          M = buf[ir*8+3], Y = buf[ir*8+4];
+          M = buf[ir*8+3], Y = buf[ir*8+4], T = buf[ir*8+5];
     if (!Number.isFinite(uz) || !Number.isFinite(rho)) continue;
-    if (ir === 0) axis = uz;
+    if (ir === 0){ axis = uz; Taxis = T; Yaxis = Y; }
     if (Math.abs(uz) > Math.abs(mx)) mx = uz;
     if (M > machMax) machMax = M;
     const rc = (ir + 0.5) * S.dr;
@@ -466,7 +532,7 @@ function consumeProbeArr(buf, t){
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
   }
-  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax };
+  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis };
   if (mx > S.peak){ S.peak = mx; S.peakT = t; }
   S.series.push([t, axis, mx]);
   if (S.series.length > 4000) S.series.splice(0, 2000);
@@ -494,7 +560,8 @@ const fmtP = pa => pa >= 1e5 ? (pa/1e5).toFixed(2) + ' bar'
                              : pa.toFixed(1) + ' Pa';
 
 function updateMetrics(){
-  const D = derived(), m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0 };
+  const D = derived(),
+        m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0, Taxis:0, Yaxis:0 };
   const flags = [];
   const cellsAcrossThroat = D.rt / S.dr;
 
@@ -548,10 +615,16 @@ function updateMetrics(){
     `that costs a lot of drag. It is the cheapest way to see a bow shock, and the worst way to fly.`]);
 
   flags.push(['warn',
-    `<b>One gas, everywhere.</b> γ = ${fmt(D.g,2)} and R = ${fmt(D.Rg,0)} J/kg·K apply to the ` +
-    `exhaust and to the ambient alike — there is no mixture model and no combustion. Real ` +
-    `exhaust has γ ≈ 1.2 and R ≈ 350, which changes the expansion; setting those here makes ` +
-    `the plume right and the atmosphere wrong. Pick whichever end you are studying.`]);
+    `<b>Two gases, both calorically perfect.</b> Exhaust is γ ${fmt(D.g,2)} / M ` +
+    `${fmt(D.Me_M,1)} g/mol, atmosphere is γ ${fmt(D.ambG,2)} / M ${fmt(D.amb_M,1)} g/mol, and ` +
+    `they mix by mass fraction. What is missing is chemistry: specific heats are constant, so ` +
+    `there is no dissociation in the chamber and no recombination as the flow expands. Real ` +
+    `nozzles sit between the frozen and equilibrium limits, and this is the frozen one.`]);
+  if (D.pa > 2e6) flags.push(['warn',
+    `At ${fmtP(D.pa)} the ambient gas is dense enough that the ideal gas law is an ` +
+    `approximation. For CO₂ well above its critical temperature, as on Venus, it is a good ` +
+    `one — the modelled ambient density of ${fmt(D.rhoAmb,1)} kg/m³ is within a few percent of ` +
+    `reality — but do not push it much further.`]);
   flags.push(['warn',
     `The numbers above the line are 1-D isentropic theory and are exact for what they assume ` +
     `(no separation, no boundary layer, uniform exit). The measured block below comes from the ` +
@@ -582,7 +655,14 @@ function updateMetrics(){
       ['Isp (vac-corrected)', fmt(D.isp,0) + ' s' + (P.nozShape === 0 ? ` → ${fmt(D.isp*D.lambda,0)} s` : '')],
       ['optimum ε here',    fmt(D.epsOpt,2) + ' : 1'],
     ]) + '<hr>' +
-    rows('Environment', [
+    rows('Gases', [
+      ['exhaust γ / M',   fmt(D.g,2) + ' / ' + fmt(D.Me_M,1) + ' g/mol'],
+      ['exhaust R',       fmt(D.Rg,0) + ' J/kg·K'],
+      ['ambient γ / M',   fmt(D.ambG,2) + ' / ' + fmt(D.amb_M,1) + ' g/mol'],
+      ['ambient R',       fmt(D.ambR,0) + ' J/kg·K'],
+      ['exit ρ / ambient ρ', fmt(D.rhoE / D.rhoAmb, 3)],
+    ]) + '<hr>' +
+    rows('Atmosphere', [
       ['ambient pressure', fmtP(D.pa)],
       ['ambient density',  fmt(D.rhoAmb,4) + ' kg/m³'],
       ['sound speed',      fmt(D.aAmb,0) + ' m/s'],
@@ -594,6 +674,8 @@ function updateMetrics(){
       ['peak u_z ever', fmt(S.peak,0) + ' m/s' + (S.peak > 1 ? ` @ ${fmt(S.peakT,2)} ms` : '')],
       ['max Mach here', fmt(m.machMax,2)],
       ['max Mach field',fmt(CP.machMax,2)],
+      ['on-axis T',     fmt(m.Taxis,0) + ' K'],
+      ['on-axis exhaust',fmt(m.Yaxis*100,0) + '%'],
       ['propellant flow', fmt(m.mdot*1000,1) + ' g/s' +
                         (D.mdot > 0 ? ` (${fmt(100*m.mdot/D.mdot,0)}% of ideal)` : '')],
       ['all gas across',fmt(m.mdotAll*1000,1) + ' g/s'],
@@ -602,6 +684,7 @@ function updateMetrics(){
     ]) +
     rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
   markActiveQuality();
+  markActiveChoices();
 }
 
 /* One definition of the colour scale, shared by the shader, the on-screen legend and the
@@ -660,15 +743,16 @@ struct Params {
   vehD  : vec4<f32>,          // injectorDepth, p_chamber, rho_chamber, _
   flu   : vec4<f32>,          // visc, _, tracerFade, smagorinsky
   misc  : vec4<f32>,          // emptyDomain, probeIz, _, _
-  gas   : vec4<f32>,          // gamma, R, Prandtl, rk stage weight
+  gas   : vec4<f32>,          // gamma_exhaust, gamma_ambient, Prandtl, rk stage weight
   gas2  : vec4<f32>,          // a_ref, spongeZ, spongeR, _
+  gasB  : vec4<f32>,          // cv_exhaust, R_exhaust, cv_ambient, R_ambient
 };
 @group(0) @binding(0) var<uniform> P : Params;
 `;
 
 const PARAM_STRIDE = 256;                 // uniform dynamic-offset alignment
 const PARAM_FLOATS = PARAM_STRIDE / 4;
-const PARAM_BYTES  = 176;                 // the part of a slot the struct actually covers
+const PARAM_BYTES  = 192;                 // the part of a slot the struct actually covers
 
 const WGSL_REDUCE = `
 struct RP { n : u32, first : u32, _a : u32, _b : u32 };
@@ -775,7 +859,7 @@ function wgpuFail(msg){
    `simT` is the simulated time this stage sits at, which is what the chamber ramp needs;
    the interactive loop plans a whole frame's worth of stages before submitting any of them,
    so it cannot read the ramp off S.t. */
-const CTEST = { emptyDomain:false };
+const CTEST = { emptyDomain:false, noSponge:false };
 function packParams(slot, dt, weight, simT){
   const F = WG.paramF, I = WG.paramI, o = slot * PARAM_FLOATS;
   const E = env(), C = chamberState(simT);
@@ -795,9 +879,15 @@ function packParams(slot, dt, weight, simT){
   F[o+32] = CTEST.emptyDomain ? 1 : 0;
   F[o+33] = probeIz().iz; F[o+34] = 0;     F[o+35] = 0;
 
-  F[o+36] = P.gamma;  F[o+37] = P.Rgas;    F[o+38] = 0.72;      F[o+39] = weight;
-  const aRef = Math.max(E.aA, Math.sqrt(P.gamma * P.Rgas * P.Tc));
-  F[o+40] = aRef;     F[o+41] = 0.08 * S.Lz; F[o+42] = 0.12 * S.Rmax; F[o+43] = 0;
+  F[o+36] = P.gammaE; F[o+37] = E.g;       F[o+38] = 0.72;      F[o+39] = weight;
+  const aRef = Math.max(E.aA, Math.sqrt(P.gammaE * P.RgasE * P.Tc));
+  F[o+40] = aRef;
+  F[o+41] = CTEST.noSponge ? 0 : 0.08 * S.Lz;
+  F[o+42] = CTEST.noSponge ? 0 : 0.12 * S.Rmax;
+  F[o+43] = 0;
+  // mixture rule inputs: specific heat at constant volume and gas constant, per species
+  F[o+44] = P.RgasE / (P.gammaE - 1);          F[o+45] = P.RgasE;
+  F[o+46] = E.Rg / (E.g - 1);                  F[o+47] = E.Rg;
 }
 </script>
 
@@ -837,10 +927,24 @@ const WALL   : i32 = 1;
 const PLENUM : i32 = 2;
 const PI : f32 = 3.14159265359;
 
-fn GAM() -> f32 { return P.gas.x; }
-fn RGAS() -> f32 { return P.gas.y; }
-/* Positivity floors relative to the ambient state rather than absolute: an absolute 1 Pa
-   floor is invisible at sea level and silently clamps the flow at 65 km. */
+/* ---- two-species thermodynamics ----------------------------------------------
+   Y is the exhaust mass fraction, carried as rho*Y and active rather than passive:
+   it sets the local equation of state. For a mixture of two calorically perfect
+   gases at a common temperature the specific heats add by mass fraction, which is
+   exact, and everything else follows:
+
+     cv = Y*cv_e + (1-Y)*cv_a        R = Y*R_e + (1-Y)*R_a
+     gamma = (cv + R) / cv           p = rho * R * T = (gamma - 1) * rho * e
+
+   So the plume and the atmosphere can be genuinely different gases, with a real
+   molecular-weight jump across the contact surface between them. */
+fn cvMix(Y : f32) -> f32 { return mix(P.gasB.z, P.gasB.x, clamp(Y, 0.0, 1.0)); }
+fn rMix(Y : f32)  -> f32 { return mix(P.gasB.w, P.gasB.y, clamp(Y, 0.0, 1.0)); }
+fn gamMix(Y : f32) -> f32 { let cv = cvMix(Y); return (cv + rMix(Y)) / cv; }
+fn cpMix(Y : f32) -> f32 { return cvMix(Y) + rMix(Y); }
+
+/* Positivity floors relative to the ambient state rather than absolute: an absolute
+   1 Pa floor is invisible on Venus and clamps the flow to nothing on Mars. */
 fn RHO_FLOOR() -> f32 { return 1.0e-7 * P.env.z; }
 fn P_FLOOR() -> f32 { return 1.0e-7 * P.env.y; }
 
@@ -886,29 +990,34 @@ fn solidCell(iz : i32, ir : i32) -> i32 {
 }
 fn blocked(iz : i32, ir : i32) -> bool { return solidCell(iz, ir) == WALL; }
 
-fn toPrim(u : vec4<f32>) -> vec4<f32> {          // -> (rho, uz, ur, p)
+/* Primitive state travels with its own mass fraction, because the mixture rule needs it
+   to say what the pressure is; a face flux carries the species flux for the same reason. */
+struct Prim { w : vec4<f32>, Y : f32 };      // w = (rho, u_normal, u_tangential, p)
+struct Flux { f : vec4<f32>, y : f32 };      // f = (rho, rho*u_n, rho*u_t, E), y = rho*u*Y
+
+fn toPrim(u : vec4<f32>, d : f32) -> Prim {
   let rho = max(u.x, RHO_FLOOR());
   let uz = u.y / rho; let ur = u.z / rho;
-  let p = max((GAM() - 1.0) * (u.w - 0.5 * rho * (uz * uz + ur * ur)), P_FLOOR());
-  return vec4<f32>(rho, uz, ur, p);
+  let Y = clamp(d / rho, 0.0, 1.0);
+  let p = max((gamMix(Y) - 1.0) * (u.w - 0.5 * rho * (uz * uz + ur * ur)), P_FLOOR());
+  return Prim(vec4<f32>(rho, uz, ur, p), Y);
 }
-fn toCons(w : vec4<f32>) -> vec4<f32> {
+fn toCons(w : vec4<f32>, Y : f32) -> vec4<f32> {
   return vec4<f32>(w.x, w.x * w.y, w.x * w.z,
-                   w.w / (GAM() - 1.0) + 0.5 * w.x * (w.y * w.y + w.z * w.z));
+                   w.w / (gamMix(Y) - 1.0) + 0.5 * w.x * (w.y * w.y + w.z * w.z));
 }
-/* Freestream, in each face's own frame: normal component second, tangential third. */
+/* Freestream: pure ambient gas, Y = 0, moving axially at the flight speed. */
 fn ambZ() -> vec4<f32> { return vec4<f32>(P.env.z, P.env.w, 0.0, P.env.y); }
-fn ambR() -> vec4<f32> { return vec4<f32>(P.env.z, 0.0, P.env.w, P.env.y); }
-fn ambCons() -> vec4<f32> { return toCons(ambZ()); }
+fn ambCons() -> vec4<f32> { return toCons(ambZ(), 0.0); }
 `;
 
 const WGSL_COMP = WGSL_GEOM + `
 @group(1) @binding(0) var<storage, read>       Ua : array<vec4<f32>>;   // U^n
 @group(1) @binding(1) var<storage, read_write> Ub : array<vec4<f32>>;   // stage target
-@group(1) @binding(2) var<storage, read>       Da : array<f32>;         // rho*Y, exhaust tracer
+@group(1) @binding(2) var<storage, read>       Da : array<f32>;         // rho*Y
 @group(1) @binding(3) var<storage, read_write> Db : array<f32>;
-@group(1) @binding(4) var<storage, read_write> Fz : array<vec4<f32>>;
-@group(1) @binding(5) var<storage, read_write> Fr : array<vec4<f32>>;
+@group(1) @binding(4) var<storage, read_write> Fz : array<Flux>;
+@group(1) @binding(5) var<storage, read_write> Fr : array<Flux>;
 @group(1) @binding(6) var<storage, read_write> wav : array<vec2<f32>>;
 @group(1) @binding(7) var<storage, read_write> probeB : array<f32>;
 @group(1) @binding(8) var<storage, read>       Uold : array<vec4<f32>>; // U^n for RK stage 2
@@ -920,7 +1029,13 @@ fn cIdx(iz : i32, ir : i32) -> u32 {
   return u32(r * P.cells.x + z);
 }
 fn Uat(iz : i32, ir : i32) -> vec4<f32> { return Ua[cIdx(iz, ir)]; }
-fn Wat(iz : i32, ir : i32) -> vec4<f32> { return toPrim(Uat(iz, ir)); }
+fn Wat(iz : i32, ir : i32) -> Prim { let k = cIdx(iz, ir); return toPrim(Ua[k], Da[k]); }
+fn Yat(iz : i32, ir : i32) -> f32 {
+  let k = cIdx(iz, ir);
+  return clamp(Da[k] / max(Ua[k].x, RHO_FLOOR()), 0.0, 1.0);
+}
+/* The tangential/normal swap for radial faces, applied to a whole primitive state. */
+fn swapNT(a : Prim) -> Prim { return Prim(a.w.xzyw, a.Y); }
 
 fn minmod(a : f32, b : f32) -> f32 {
   if (a * b <= 0.0) { return 0.0; }
@@ -930,22 +1045,39 @@ fn minmod(a : f32, b : f32) -> f32 {
 fn mm4(a : vec4<f32>, b : vec4<f32>) -> vec4<f32> {
   return vec4<f32>(minmod(a.x, b.x), minmod(a.y, b.y), minmod(a.z, b.z), minmod(a.w, b.w));
 }
+/* MUSCL with a minmod limiter, on the mass fraction as well as on (rho, u, p): the mixture
+   rule needs Y at the face, and taking it from the cell centre instead would make the
+   species and the mass fluxes inconsistent at second order. */
+fn reconL(m2 : Prim, m1 : Prim, c0 : Prim) -> Prim {
+  return Prim(m1.w + 0.5 * mm4(m1.w - m2.w, c0.w - m1.w),
+              m1.Y + 0.5 * minmod(m1.Y - m2.Y, c0.Y - m1.Y));
+}
+fn reconR(m1 : Prim, c0 : Prim, p1 : Prim) -> Prim {
+  return Prim(c0.w - 0.5 * mm4(c0.w - m1.w, p1.w - c0.w),
+              c0.Y - 0.5 * minmod(c0.Y - m1.Y, p1.Y - c0.Y));
+}
 
-/* HLLC, in a frame where .y is the wall-normal velocity and .z the tangential one. */
-fn hllc(wL : vec4<f32>, wR : vec4<f32>) -> vec4<f32> {
-  let g = GAM();
-  let rL = wL.x; let unL = wL.y; let utL = wL.z; let pL = wL.w;
-  let rR = wR.x; let unR = wR.y; let utR = wR.z; let pR = wR.w;
-  let aL = sqrt(g * pL / rL); let aR = sqrt(g * pR / rR);
-  let EL = pL / (g - 1.0) + 0.5 * rL * (unL * unL + utL * utL);
-  let ER = pR / (g - 1.0) + 0.5 * rR * (unR * unR + utR * utR);
+/* HLLC in a frame where .y is the wall-normal velocity and .z the tangential one. Each
+   side carries its own gamma, so a contact surface between two different gases is a jump
+   in the equation of state as well as in density. The species flux is the mass flux times
+   the mass fraction on whichever side the contact wave came from, which is what keeps the
+   two consistent. */
+fn hllc(L : Prim, R : Prim) -> Flux {
+  let gL = gamMix(L.Y); let gR = gamMix(R.Y);
+  let rL = L.w.x; let unL = L.w.y; let utL = L.w.z; let pL = L.w.w;
+  let rR = R.w.x; let unR = R.w.y; let utR = R.w.z; let pR = R.w.w;
+  let aL = sqrt(gL * pL / rL); let aR = sqrt(gR * pR / rR);
+  let EL = pL / (gL - 1.0) + 0.5 * rL * (unL * unL + utL * utL);
+  let ER = pR / (gR - 1.0) + 0.5 * rR * (unR * unR + utR * utR);
   let SL = min(unL - aL, unR - aR);
   let SR = max(unL + aL, unR + aR);
   if (SL >= 0.0) {
-    return vec4<f32>(rL * unL, rL * unL * unL + pL, rL * unL * utL, (EL + pL) * unL);
+    let f = vec4<f32>(rL * unL, rL * unL * unL + pL, rL * unL * utL, (EL + pL) * unL);
+    return Flux(f, f.x * L.Y);
   }
   if (SR <= 0.0) {
-    return vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
+    let f = vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
+    return Flux(f, f.x * R.Y);
   }
   let den = rL * (SL - unL) - rR * (SR - unR);
   var Ss = 0.0;
@@ -957,35 +1089,40 @@ fn hllc(wL : vec4<f32>, wR : vec4<f32>) -> vec4<f32> {
     let f = rL * (SL - unL) / (SL - Ss);
     let Us = vec4<f32>(f, f * Ss, f * utL,
               f * (EL / rL + (Ss - unL) * (Ss + pL / (rL * (SL - unL)))));
-    return FL + SL * (Us - vec4<f32>(rL, rL * unL, rL * utL, EL));
+    let F = FL + SL * (Us - vec4<f32>(rL, rL * unL, rL * utL, EL));
+    return Flux(F, F.x * L.Y);
   }
   let FR = vec4<f32>(rR * unR, rR * unR * unR + pR, rR * unR * utR, (ER + pR) * unR);
   let f = rR * (SR - unR) / (SR - Ss);
   let Us = vec4<f32>(f, f * Ss, f * utR,
             f * (ER / rR + (Ss - unR) * (Ss + pR / (rR * (SR - unR)))));
-  return FR + SR * (Us - vec4<f32>(rR, rR * unR, rR * utR, ER));
+  let F = FR + SR * (Us - vec4<f32>(rR, rR * unR, rR * utR, ER));
+  return Flux(F, F.x * R.Y);
 }
 
-/* Thornber's low-Mach reconstruction fix. Plain upwinding has dissipation that grows like
-   1/M; the external flow over the body runs two orders of magnitude slower than the plume
-   and would otherwise be dissipated away. */
-fn lowMach(wL : ptr<function, vec4<f32>>, wR : ptr<function, vec4<f32>>) {
-  let g = GAM();
-  let aL = sqrt(g * (*wL).w / (*wL).x);
-  let aR = sqrt(g * (*wR).w / (*wR).x);
-  let ML = length(vec2<f32>((*wL).y, (*wL).z)) / aL;
-  let MR = length(vec2<f32>((*wR).y, (*wR).z)) / aR;
+/* Thornber's low-Mach reconstruction fix. Upwind dissipation grows like 1/M, and this
+   problem has external flow at Mach 0.2 beside a plume at Mach 4 on the same grid. */
+fn lowMach(L : ptr<function, Prim>, R : ptr<function, Prim>) {
+  let aL = sqrt(gamMix((*L).Y) * (*L).w.w / (*L).w.x);
+  let aR = sqrt(gamMix((*R).Y) * (*R).w.w / (*R).w.x);
+  let ML = length(vec2<f32>((*L).w.y, (*L).w.z)) / aL;
+  let MR = length(vec2<f32>((*R).w.y, (*R).w.z)) / aR;
   let zf = min(1.0, max(ML, MR));
-  let un = 0.5 * ((*wL).y + (*wR).y); let dn = 0.5 * ((*wL).y - (*wR).y) * zf;
-  let ut = 0.5 * ((*wL).z + (*wR).z); let dt2 = 0.5 * ((*wL).z - (*wR).z) * zf;
-  (*wL).y = un + dn; (*wR).y = un - dn;
-  (*wL).z = ut + dt2; (*wR).z = ut - dt2;
+  let un = 0.5 * ((*L).w.y + (*R).w.y); let dn = 0.5 * ((*L).w.y - (*R).w.y) * zf;
+  let ut = 0.5 * ((*L).w.z + (*R).w.z); let dt2 = 0.5 * ((*L).w.z - (*R).w.z) * zf;
+  (*L).w.y = un + dn; (*R).w.y = un - dn;
+  (*L).w.z = ut + dt2; (*R).w.z = ut - dt2;
 }
 
-/* A wall is handled by reflecting the fluid state through it and letting the Riemann solver
-   produce the flux. Every surface here is static, so the reflection is about zero. */
-fn reflectN(w : vec4<f32>) -> vec4<f32> {
-  return vec4<f32>(w.x, -w.y, w.z, w.w);
+/* A wall is handled by reflecting the fluid state through it and letting the Riemann
+   solver produce the flux. Every surface here is static, so the reflection is about zero,
+   and the mass fraction reflects unchanged. */
+fn reflectN(a : Prim) -> Prim {
+  return Prim(vec4<f32>(a.w.x, -a.w.y, a.w.z, a.w.w), a.Y);
+}
+fn floorPrim(a : Prim) -> Prim {
+  return Prim(vec4<f32>(max(a.w.x, RHO_FLOOR()), a.w.y, a.w.z, max(a.w.w, P_FLOOR())),
+              clamp(a.Y, 0.0, 1.0));
 }
 
 /* ---- axial faces: iz in [0, Nz], ir in [0, Nr) ---- */
@@ -995,11 +1132,11 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
   if (iz > P.cells.x || ir >= P.cells.y) { return; }
   let fi = u32(ir * (P.cells.x + 1) + iz);
 
-  var bL = blocked(max(iz - 1, 0), ir);
-  var bR = blocked(min(iz, P.cells.x - 1), ir);
-  if (bL && bR) { Fz[fi] = vec4<f32>(0.0); return; }
+  let bL = blocked(max(iz - 1, 0), ir);
+  let bR = blocked(min(iz, P.cells.x - 1), ir);
+  if (bL && bR) { Fz[fi] = Flux(vec4<f32>(0.0), 0.0); return; }
 
-  var wL : vec4<f32>; var wR : vec4<f32>;
+  var wL : Prim; var wR : Prim;
   if (bL) {                                            // wall on the left
     wR = Wat(iz, ir);
     wL = reflectN(wR);
@@ -1008,7 +1145,7 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
     wR = reflectN(wL);
   } else if (iz == 0) {                                // inlet: the freestream, imposed
     wR = Wat(0, ir);
-    wL = ambZ();
+    wL = Prim(ambZ(), 0.0);
   } else if (iz == P.cells.x) {                        // outlet: zero gradient
     wL = Wat(P.cells.x - 1, ir);
     wR = wL;
@@ -1017,13 +1154,11 @@ fn fluxZ(@builtin(global_invocation_id) g : vec3<u32>) {
     var wm2 = Wat(iz - 2, ir); var wp1 = Wat(iz + 1, ir);
     if (iz - 2 < 0 || blocked(iz - 2, ir)) { wm2 = wm1; }
     if (iz + 1 >= P.cells.x || blocked(iz + 1, ir)) { wp1 = w0; }
-    wL = wm1 + 0.5 * mm4(wm1 - wm2, w0 - wm1);
-    wR = w0  - 0.5 * mm4(w0 - wm1, wp1 - w0);
+    wL = reconL(wm2, wm1, w0);
+    wR = reconR(wm1, w0, wp1);
     lowMach(&wL, &wR);
   }
-  wL.x = max(wL.x, RHO_FLOOR()); wR.x = max(wR.x, RHO_FLOOR());
-  wL.w = max(wL.w, P_FLOOR());   wR.w = max(wR.w, P_FLOOR());
-  Fz[fi] = hllc(wL, wR);
+  Fz[fi] = hllc(floorPrim(wL), floorPrim(wR));
 }
 
 /* ---- radial faces: iz in [0, Nz), ir in [0, Nr] ---- */
@@ -1032,45 +1167,45 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x); let ir = i32(g.y);
   if (iz >= P.cells.x || ir > P.cells.y) { return; }
   let fi = u32(ir * P.cells.x + iz);
-  if (ir == 0) { Fr[fi] = vec4<f32>(0.0); return; }     // axis: face area is zero
+  if (ir == 0) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }   // axis: face area is zero
 
   let bL = blocked(iz, max(ir - 1, 0));
   let bR = blocked(iz, min(ir, P.cells.y - 1));
-  if (bL && bR) { Fr[fi] = vec4<f32>(0.0); return; }
+  if (bL && bR) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }
 
-  var wL : vec4<f32>; var wR : vec4<f32>;
+  var wL : Prim; var wR : Prim;
   if (bL) {
-    wR = Wat(iz, ir).xzyw;                             // (rho, ur, uz, p): normal first
+    wR = swapNT(Wat(iz, ir));                          // (rho, ur, uz, p): normal first
     wL = reflectN(wR);
   } else if (bR) {
-    wL = Wat(iz, ir - 1).xzyw;
+    wL = swapNT(Wat(iz, ir - 1));
     wR = reflectN(wL);
   } else if (ir == P.cells.y) {                        // far field: zero radial gradient
-    let w = Wat(iz, P.cells.y - 1).xzyw;
-    wL = w; wR = w;
+    wL = swapNT(Wat(iz, P.cells.y - 1));
+    wR = wL;
   } else {
-    let wm1 = Wat(iz, ir - 1).xzyw; let w0 = Wat(iz, ir).xzyw;
-    var wm2 = Wat(iz, ir - 2).xzyw; var wp1 = Wat(iz, ir + 1).xzyw;
+    let wm1 = swapNT(Wat(iz, ir - 1)); let w0 = swapNT(Wat(iz, ir));
+    var wm2 = swapNT(Wat(iz, ir - 2)); var wp1 = swapNT(Wat(iz, ir + 1));
     if (ir - 2 < 0 || blocked(iz, ir - 2)) { wm2 = wm1; }
     if (ir + 1 >= P.cells.y || blocked(iz, ir + 1)) { wp1 = w0; }
-    wL = wm1 + 0.5 * mm4(wm1 - wm2, w0 - wm1);
-    wR = w0  - 0.5 * mm4(w0 - wm1, wp1 - w0);
+    wL = reconL(wm2, wm1, w0);
+    wR = reconR(wm1, w0, wp1);
     lowMach(&wL, &wR);
   }
-  wL.x = max(wL.x, RHO_FLOOR()); wR.x = max(wR.x, RHO_FLOOR());
-  wL.w = max(wL.w, P_FLOOR());   wR.w = max(wR.w, P_FLOOR());
-  Fr[fi] = hllc(wL, wR).xzyw;                          // back to (rho, rho*uz, rho*ur, E)
+  let F = hllc(floorPrim(wL), floorPrim(wR));
+  Fr[fi] = Flux(F.f.xzyw, F.y);                        // back to (rho, rho*uz, rho*ur, E)
 }
 
-/* ---- viscous stress and conduction, central differences at cell centres ---- */
-fn muEff(iz : i32, ir : i32, rho : f32) -> f32 {
+/* ---- viscous stress and conduction, central differences at cell centres ----
+   The caller has already loaded the four neighbours, so they are passed in rather than
+   fetched again: every primitive costs two buffer loads now that the mass fraction has to
+   come with it, and this kernel is memory bound. */
+fn muEff(ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
+         wn : vec4<f32>, ws : vec4<f32>) -> f32 {
   var nu = P.flu.x;
   if (P.flu.w > 0.0) {                                  // Smagorinsky sub-grid
     let dz = P.d.x; let dr = P.d.y;
     let rc = (f32(ir) + 0.5) * dr;
-    let wp = Wat(iz + 1, ir); let wm = Wat(iz - 1, ir);
-    let wn = Wat(iz, ir + 1); let ws = Wat(iz, ir - 1);
-    let w0 = Wat(iz, ir);
     let duzdz = (wp.y - wm.y) / (2.0 * dz);
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
@@ -1081,7 +1216,7 @@ fn muEff(iz : i32, ir : i32, rho : f32) -> f32 {
     let dd = sqrt(dz * dr);
     nu = nu + P.flu.w * P.flu.w * dd * dd * sqrt(max(s2, 0.0));
   }
-  return rho * nu;
+  return w0.x * nu;
 }
 
 @compute @workgroup_size(8, 8)
@@ -1097,26 +1232,26 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
      kernels treat it as ordinary fluid, so the nozzle sees a reservoir and chokes on its
      own rather than being told what mass flow to pass. */
   if (s == PLENUM) {
-    Ub[k] = toCons(vec4<f32>(P.vehD.z, 0.0, 0.0, P.vehD.y));
+    Ub[k] = toCons(vec4<f32>(P.vehD.z, 0.0, 0.0, P.vehD.y), 1.0);
     Db[k] = P.vehD.z;
     return;
   }
   if (s == WALL) {
-    // Keep wall cells holding a plausible state: MUSCL reconstruction near a corner can
-    // still reach one, and stale garbage there shows up as a spike at the lip.
-    var acc = vec2<f32>(0.0); var n = 0.0;
+    // Wall cells hold the neighbour average so that MUSCL reaching a corner, and species
+    // diffusion across the wall face, both see a zero-gradient condition rather than a sink.
+    var acc = vec3<f32>(0.0); var n = 0.0;
     for (var q = 0; q < 4; q++) {
       var jz = iz; var jr = ir;
       if (q == 0) { jz = iz - 1; } else if (q == 1) { jz = iz + 1; }
       else if (q == 2) { jr = ir - 1; } else { jr = ir + 1; }
       if (jz >= 0 && jz < P.cells.x && jr >= 0 && jr < P.cells.y && !blocked(jz, jr)) {
-        let w = Wat(jz, jr); acc = acc + vec2<f32>(w.x, w.w); n = n + 1.0;
+        let a = Wat(jz, jr); acc = acc + vec3<f32>(a.w.x, a.w.w, a.Y); n = n + 1.0;
       }
     }
-    var rho = P.env.z; var pr = P.env.y;
-    if (n > 0.0) { rho = acc.x / n; pr = acc.y / n; }
-    Ub[k] = toCons(vec4<f32>(rho, 0.0, 0.0, pr));
-    Db[k] = 0.0;
+    var rho = P.env.z; var pr = P.env.y; var Yw = 0.0;
+    if (n > 0.0) { rho = acc.x / n; pr = acc.y / n; Yw = acc.z / n; }
+    Ub[k] = toCons(vec4<f32>(rho, 0.0, 0.0, pr), Yw);
+    Db[k] = rho * Yw;
     return;
   }
 
@@ -1126,15 +1261,20 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
   let frR = Fr[u32((ir + 1) * P.cells.x + iz)];
   let rL = f32(ir) * dr; let rR = f32(ir + 1) * dr;
 
-  let w0 = Wat(iz, ir);
-  var L = -(fzR - fzL) / dz - (rR * frR - rL * frL) / (rc * dr);
+  let a0 = Wat(iz, ir);
+  let w0 = a0.w; let Y0 = a0.Y;
+  var L = -(fzR.f - fzL.f) / dz - (rR * frR.f - rL * frL.f) / (rc * dr);
   L.z = L.z + w0.w / rc;                                // axisymmetric pressure source
+
+  // species, from the same Riemann solve as the mass flux
+  var Ld = -(fzR.y - fzL.y) / dz - (rR * frR.y - rL * frL.y) / (rc * dr);
 
   // ---- viscous terms ----
   if (P.flu.x > 0.0 || P.flu.w > 0.0) {
-    let mu = muEff(iz, ir, w0.x);
-    let wp = Wat(iz + 1, ir); let wm = Wat(iz - 1, ir);
-    let wn = Wat(iz, ir + 1); let ws = Wat(iz, ir - 1);
+    let ap = Wat(iz + 1, ir); let am = Wat(iz - 1, ir);
+    let aup = Wat(iz, ir + 1); let adn = Wat(iz, ir - 1);
+    let wp = ap.w; let wm = am.w; let wn = aup.w; let ws = adn.w;
+    let mu = muEff(ir, w0, wp, wm, wn, ws);
     let dz2 = dz * dz; let dr2 = dr * dr;
     let lapz = (wp.y - 2.0 * w0.y + wm.y) / dz2
              + ((rR * (wn.y - w0.y) - rL * (w0.y - ws.y)) / (rc * dr2));
@@ -1143,7 +1283,7 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
              - w0.z / (rc * rc);
     L.y = L.y + mu * lapz;
     L.z = L.z + mu * lapr;
-    // viscous heating plus conduction (Pr constant, cp = gamma R / (gamma - 1))
+    // viscous heating plus conduction, each cell using its own mixture cp and R
     let duzdz = (wp.y - wm.y) / (2.0 * dz);
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
@@ -1151,32 +1291,24 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
     let divu = duzdz + durdr + w0.z / rc;
     let phi = mu * (2.0 * (duzdz * duzdz + durdr * durdr + (w0.z / rc) * (w0.z / rc))
                     + (duzdr + durdz) * (duzdr + durdz) - (2.0 / 3.0) * divu * divu);
-    let Rg = RGAS();
-    let cp = GAM() * Rg / (GAM() - 1.0);
-    let kt = mu * cp / P.gas.z;
-    let T0c = w0.w / (w0.x * Rg);
-    let Tp = wp.w / (wp.x * Rg); let Tm = wm.w / (wm.x * Rg);
-    let Tn = wn.w / (wn.x * Rg); let Ts = ws.w / (ws.x * Rg);
+    let kt = mu * cpMix(Y0) / P.gas.z;
+    let T0c = w0.w / (w0.x * rMix(Y0));
+    let Tp = wp.w / (wp.x * rMix(ap.Y)); let Tm = wm.w / (wm.x * rMix(am.Y));
+    let Tn = wn.w / (wn.x * rMix(aup.Y)); let Ts = ws.w / (ws.x * rMix(adn.Y));
     let lapT = (Tp - 2.0 * T0c + Tm) / dz2
              + ((rR * (Tn - T0c) - rL * (T0c - Ts)) / (rc * dr2));
     L.w = L.w + phi + kt * lapT + mu * (w0.y * lapz + w0.z * lapr);
+
+    /* Species diffusion at unity Schmidt number. With two real gases this is no longer
+       cosmetic: an unmixed interface would keep a discontinuous equation of state, and it
+       is the sub-grid part that stands in for the turbulent mixing axial symmetry forbids. */
+    let lapY = (ap.Y - 2.0 * Y0 + am.Y) / dz2
+             + ((rR * (aup.Y - Y0) - rL * (Y0 - adn.Y)) / (rc * dr2));
+    Ld = Ld + mu * lapY;
   }
 
   let wgt = P.gas.w;
   var Un = (1.0 - wgt) * (Ua[k] + dt * L) + wgt * Uold[k];
-
-  // ---- exhaust tracer, carried by the mass flux with an upwind mass fraction ----
-  let Yl = Da[cIdx(iz - 1, ir)] / max(Wat(iz - 1, ir).x, RHO_FLOOR());
-  let Y0 = Da[k] / max(w0.x, RHO_FLOOR());
-  let Yr = Da[cIdx(iz + 1, ir)] / max(Wat(iz + 1, ir).x, RHO_FLOOR());
-  let Yd = Da[cIdx(iz, ir - 1)] / max(Wat(iz, ir - 1).x, RHO_FLOOR());
-  let Yu = Da[cIdx(iz, ir + 1)] / max(Wat(iz, ir + 1).x, RHO_FLOOR());
-  var yzL = Y0; if (fzL.x >= 0.0) { yzL = Yl; }
-  var yzR = Y0; if (fzR.x <  0.0) { yzR = Yr; }
-  var yrL = Y0; if (frL.x >= 0.0) { yrL = Yd; }
-  var yrR = Y0; if (frR.x <  0.0) { yrR = Yu; }
-  let Ld = -(fzR.x * yzR - fzL.x * yzL) / dz
-           - (rR * frR.x * yrR - rL * frL.x * yrL) / (rc * dr);
   var Dn = (1.0 - wgt) * (Da[k] + dt * Ld) + wgt * Dold[k];
   Dn = Dn * exp(-P.flu.z * dt);
 
@@ -1205,8 +1337,9 @@ fn waveSpeed(@builtin(global_invocation_id) g : vec3<u32>) {
   if (iz >= P.cells.x || ir >= P.cells.y) { return; }
   let k = u32(ir * P.cells.x + iz);
   if (blocked(iz, ir)) { wav[k] = vec2<f32>(0.0); return; }
-  let w = toPrim(Ua[k]);
-  let a = sqrt(GAM() * w.w / w.x);
+  let a0 = toPrim(Ua[k], Da[k]);
+  let w = a0.w;
+  let a = sqrt(gamMix(a0.Y) * w.w / w.x);
   let sp = (abs(w.y) + a) / P.d.x + (abs(w.z) + a) / P.d.y;
   let mach = length(vec2<f32>(w.y, w.z)) / a;
   wav[k] = vec2<f32>(sp, mach);
@@ -1223,23 +1356,23 @@ fn initState(@builtin(global_invocation_id) g : vec3<u32>) {
   Db[k] = 0.0;
 }
 
-/* One radial column at the measurement plane: (u_z, rho, p, Mach) per cell. */
+/* One radial column at the measurement plane: (u_z, rho, p, Mach, Y, T) per cell. */
 @compute @workgroup_size(64)
 fn probeGather(@builtin(global_invocation_id) g : vec3<u32>) {
   let ir = i32(g.x);
   if (ir >= P.cells.y) { return; }
   let iz = clamp(i32(P.misc.y), 0, P.cells.x - 1);
-  var w = vec4<f32>(P.env.z, 0.0, 0.0, P.env.y);
-  if (!blocked(iz, ir)) { w = toPrim(Ua[u32(ir * P.cells.x + iz)]); }
-  var Y = 0.0;
-  if (!blocked(iz, ir)) { Y = clamp(Da[u32(ir * P.cells.x + iz)] / w.x, 0.0, 1.0); }
-  let a = sqrt(GAM() * w.w / w.x);
+  var a0 = Prim(vec4<f32>(P.env.z, 0.0, 0.0, P.env.y), 0.0);
+  if (!blocked(iz, ir)) { let k = u32(ir * P.cells.x + iz); a0 = toPrim(Ua[k], Da[k]); }
+  let w = a0.w;
+  let a = sqrt(gamMix(a0.Y) * w.w / w.x);
   let b = u32(ir) * 8u;
   probeB[b + 0u] = w.y;
   probeB[b + 1u] = w.x;
   probeB[b + 2u] = w.w;
   probeB[b + 3u] = length(vec2<f32>(w.y, w.z)) / a;
-  probeB[b + 4u] = Y;
+  probeB[b + 4u] = a0.Y;
+  probeB[b + 5u] = w.w / (w.x * rMix(a0.Y));
 }
 `;
 
@@ -1253,7 +1386,10 @@ struct Show { viewport : vec2<f32>, field : f32, scale : f32,
 fn cIdx(iz : i32, ir : i32) -> u32 {
   return u32(clamp(ir, 0, P.cells.y - 1) * P.cells.x + clamp(iz, 0, P.cells.x - 1));
 }
-fn prim(iz : i32, ir : i32) -> vec4<f32> { return toPrim(Ua[cIdx(iz, ir)]); }
+fn prim(iz : i32, ir : i32) -> Prim {
+  let k = cIdx(iz, ir);
+  return toPrim(Ua[k], Da[k]);
+}
 
 @vertex fn vs(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
   let v = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -1284,16 +1420,16 @@ fn diverging(t : f32) -> vec3<f32> {
   let sld = solidAt(p2);
   let fld = i32(SH.field);
   if (sld != WALL) {
-    let w = prim(iz, ir);
-    let a = sqrt(GAM() * w.w / w.x);
-    let dye = clamp(Da[cIdx(iz, ir)] / w.x, 0.0, 1.0);
+    let a0 = prim(iz, ir);
+    let w = a0.w; let Y = a0.Y;
+    let a = sqrt(gamMix(Y) * w.w / w.x);
     if (fld == 0) {
-      col = mix(col, vec3<f32>(1.0, 0.87, 0.62), pow(dye, 0.7));
+      col = mix(col, vec3<f32>(1.0, 0.87, 0.62), pow(Y, 0.7));
     } else if (fld == 1) {
       col = viridis(length(vec2<f32>(w.y, w.z)) / max(SH.scale, 1e-6));
     } else if (fld == 2) {
-      let wp = prim(iz + 1, ir); let wm = prim(iz - 1, ir);
-      let wn = prim(iz, ir + 1); let ws = prim(iz, ir - 1);
+      let wp = prim(iz + 1, ir).w; let wm = prim(iz - 1, ir).w;
+      let wn = prim(iz, ir + 1).w; let ws = prim(iz, ir - 1).w;
       let vort = (wp.z - wm.z) / (2.0 * P.d.x) - (wn.y - ws.y) / (2.0 * P.d.y);
       var sgn = 1.0; if ((uv.y - 0.5) < 0.0) { sgn = -1.0; }
       col = diverging(clamp(sgn * vort / max(SH.scale, 1e-6), -1.0, 1.0));
@@ -1307,11 +1443,11 @@ fn diverging(t : f32) -> vec3<f32> {
       col = viridis(M / max(SH.scale, 1e-6));
       if (abs(M - 1.0) < 0.015 * max(SH.scale, 1.0)) { col = vec3<f32>(1.0, 1.0, 1.0); }
     } else if (fld == 7) {
-      col = viridis(w.w / (w.x * RGAS()) / max(SH.scale, 1e-6));
+      col = viridis(w.w / (w.x * rMix(Y)) / max(SH.scale, 1e-6));
     } else {
       // numerical schlieren: 1 - exp(-k |grad rho|) is how shocks are shown in practice
-      let gz = (prim(iz + 1, ir).x - prim(iz - 1, ir).x) / (2.0 * P.d.x);
-      let gr = (prim(iz, ir + 1).x - prim(iz, ir - 1).x) / (2.0 * P.d.y);
+      let gz = (prim(iz + 1, ir).w.x - prim(iz - 1, ir).w.x) / (2.0 * P.d.x);
+      let gr = (prim(iz, ir + 1).w.x - prim(iz, ir - 1).w.x) / (2.0 * P.d.y);
       let sc = length(vec2<f32>(gz, gr)) / max(SH.scale, 1e-9);
       let v = 1.0 - exp(-3.0 * sc);
       col = vec3<f32>(v, v, v);
@@ -1376,8 +1512,9 @@ function compAlloc(){
   const B = CP.buf;
   B.U = [mk(nC,16), mk(nC,16), mk(nC,16)];
   B.D = [mk(nC,4),  mk(nC,4),  mk(nC,4)];
-  B.Fz = mk((S.Nz + 1) * S.Nr, 16);
-  B.Fr = mk(S.Nz * (S.Nr + 1), 16);
+  // 32 bytes per face: the four conserved fluxes plus the species flux, padded to vec4
+  B.Fz = mk((S.Nz + 1) * S.Nr, 32);
+  B.Fr = mk(S.Nz * (S.Nr + 1), 32);
   B.wav = mk(nC, 8);
   B.probe = mk(S.Nr * 8, 4);
 
@@ -1420,7 +1557,7 @@ function compAlloc(){
   CP.mapBusy = false;
   CP.gen = (CP.gen || 0) + 1;
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gamma * P.Rgas * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
   CP.machMax = 0;
 }
 
@@ -1445,7 +1582,7 @@ function compReset(){
   pass.end();
   dev.queue.submit([enc.finish()]);
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gamma * P.Rgas * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
   CP.machMax = 0;
 }
 
@@ -1515,7 +1652,7 @@ function compSteps(n){
       if (!Number.isFinite(m[0]) || m[0] <= 0){ flagDivergence(NaN); return; }
       CP.waveMax = m[0];
       CP.machMax = m[1];
-      S.vmax = Math.max(CP.machMax * Math.sqrt(P.gamma * P.Rgas * P.tAmb), 1);
+      S.vmax = Math.max(CP.machMax * env().aA, 1);
       consumeProbeArr(pr, tag);
     }).catch(() => { if (gen === CP.gen) CP.mapBusy = false; });
   }
@@ -1892,7 +2029,7 @@ async function currentDtLimit(){
   if (Number.isFinite(m[0]) && m[0] > 0) CP.waveMax = m[0];
   if (Number.isFinite(m[1])){
     CP.machMax = m[1];
-    S.vmax = Math.max(m[1] * Math.sqrt(P.gamma * P.Rgas * P.tAmb), 1);
+    S.vmax = Math.max(m[1] * env().aA, 1);
   }
   return compChooseDt();
 }
@@ -2220,7 +2357,48 @@ function fmtVal(it, v){
 
 /* A discrete choice is a <select> and pushes a history entry; a slider is a range and
    replaces the current one, so dragging does not fill the back button with intermediates. */
+const CHOICE_TABLES = { PROPELLANTS, ATMOSPHERES };
+const CHOICE_ROWS = [];
+
+/* A row of buttons that each set several parameters at once. Composition cannot be
+   interpolated the way a slider value can, so these are the natural control for it. */
+function addChoiceRow(body, it){
+  const opts = CHOICE_TABLES[it.opts];
+  const wrap = document.createElement('div');
+  wrap.className = 'ctl';
+  wrap.innerHTML = `<div class="lab"><span>${it.t}</span></div>` +
+                   `<div class="btnrow presets"></div>` +
+                   (it.hint ? `<div class="hint">${it.hint}</div>` : '');
+  body.appendChild(wrap);
+  const row = wrap.querySelector('.presets');
+  for (const o of opts){
+    const b = document.createElement('button');
+    b.innerHTML = `<b>${o.n}</b><i>${o.d}</i>`;
+    b.addEventListener('click', () => {
+      Object.assign(P, o.p);
+      syncSliders();
+      buildGrid(); pendingRebuild = false;
+      scheduleURLSync(true); updateMetrics();
+    });
+    row.appendChild(b);
+  }
+  CHOICE_ROWS.push({ row, opts });
+}
+
+/* Highlight whichever button matches the live configuration, if any. */
+function markActiveChoices(){
+  for (const { row, opts } of CHOICE_ROWS){
+    [...row.children].forEach((b, i) => {
+      const o = opts[i];
+      const on = Object.keys(o.p).every(k =>
+        Math.abs(P[k] - o.p[k]) <= (SPEC[k].step || 1e-9) * 0.5001);
+      b.classList.toggle('active', on);
+    });
+  }
+}
+
 function addControl(body, it){
+  if (it.kind === 'buttons'){ addChoiceRow(body, it); return; }
   const wrap = document.createElement('div');
   wrap.className = 'ctl' + (it.rebuild ? ' rebuild' : '');
   if (it.choices){
@@ -2434,11 +2612,16 @@ document.getElementById('note').innerHTML =
    freestream. The solver is compressible Navier–Stokes in cylindrical coordinates, so it
    carries acoustics: the throat chokes on its own, shocks form where they must, and an
    over-expanded nozzle separates without being told to.<br><br>
-   <b>What it does not model.</b> Combustion, mixing, injector elements, multiple species,
-   radiation, ablation, and any chemistry at all — the chamber is simply held at a stagnation
-   pressure and temperature. One γ and one gas constant apply to the exhaust and to the
-   atmosphere alike. Axial symmetry forbids the three-dimensional instabilities that break a
-   real shear layer up, so the Smagorinsky term stands in for them.<br><br>
+   <b>Two gases.</b> Exhaust and atmosphere carry their own γ and gas constant, mixed by mass
+   fraction wherever they meet, so the plume boundary is a real jump in molecular weight and
+   not just in temperature. Pick them with the <b>Propellant</b> and <b>Atmosphere</b>
+   buttons.<br><br>
+   <b>What it does not model.</b> Chemistry. Specific heats are constant, so there is no
+   dissociation in the chamber and no recombination as the flow expands — this is the frozen
+   limit, and a real nozzle recovers some performance that this does not. No combustion, no
+   injector elements, no radiation or ablation: the chamber is simply held at a stagnation
+   pressure and temperature. Axial symmetry forbids the three-dimensional instabilities that
+   break a real shear layer up, so the Smagorinsky term stands in for them.<br><br>
    <b>What to trust.</b> Structure: where the sonic line sits, whether the flow separates
    inside the bell, the shock-diamond spacing in an under-expanded plume, how the base flow
    and the plume interact. The 1-D ideal numbers in the panel are exact for what they assume.
@@ -2456,7 +2639,8 @@ const URLKEY = {
   throatR:'tr', nozExitR:'er', convLen:'vl', divLen:'dl', nozShape:'ns',
   noseType:'nt', noseLen:'nl', foreLen:'fl', wallT:'wt',
   pAmbLog:'pa', tAmb:'ta', vAmb:'va',
-  gamma:'ga', Rgas:'rg', visc:'nu', smag:'cs', dyeDiss:'dd',
+  gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',
+  visc:'nu', smag:'cs', dyeDiss:'dd',
   downrange:'dn', rDomain:'rd', zAspect:'za', res:'rs', cfl:'cf', budget:'bg', spf:'sp',
   probe:'pb',
   vidFlight:'vf', vidMsPerFrame:'vm', vidFps:'vr', vidWidth:'vw', vidMbps:'vb',
