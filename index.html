@@ -178,18 +178,27 @@ const CONTROLS = [
           'about 6 cells across the throat radius; the panel reports the current figure.' },
    { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:14.75,unit:'mm', rebuild:true,
      hint:'With the throat radius this fixes the expansion ratio, and so the ambient pressure ' +
-          'the nozzle is matched to.' },
+          'the nozzle is matched to. For an aerospike it is the cowl lip radius, and the spike ' +
+          'root radius follows as √(exit² − throat²), which keeps the annular throat area equal ' +
+          'to π·throat².' },
    { k:'convLen',  t:'Converging length',    min:2,  max:120, step:1,    v:20,   unit:'mm', rebuild:true,
      hint:'Raised-cosine contour, meeting both the chamber wall and the throat at zero slope. ' +
           'The subsonic flow here is insensitive to the shape.' },
    { k:'divLen',   t:'Diverging length',     min:2,  max:250, step:1,    v:25,   unit:'mm', rebuild:true,
      hint:'Sets the divergence half-angle, and with it the cosine loss and the separation ' +
           'margin. 12 to 18° is the usual conical range.' },
-   { k:'nozShape', t:'Divergent contour',    min:0,  max:1,   step:1,    v:1,    rebuild:true,
-     choices:['Conical (straight)','Bell (parabolic)'],
+   { k:'nozShape', t:'Nozzle type',           min:0,  max:2,   step:1,    v:1,    rebuild:true,
+     choices:['Conical (straight)','Bell (parabolic)','Aerospike (plug)'],
      hint:'Conical is a straight line from throat to exit. A bell turns the flow sharply just ' +
           'past the throat and back to axial at the exit, recovering most of the cosine loss ' +
-          'in less length.' },
+          'in less length. An aerospike replaces the outer wall with the ambient: the flow ' +
+          'leaves an annular throat at the cowl lip and expands along a centrebody, so the ' +
+          'outer boundary of the plume adjusts to ambient pressure instead of being fixed by ' +
+          'the wall.' },
+   { k:'spikeTrunc', t:'Spike length built',   min:20, max:100, step:1,   v:100,  unit:'%', rebuild:true,
+     hint:'Aerospike only. Percentage of the full spike contour actually built. Real plug ' +
+          'nozzles are truncated to save mass and leave a base, which fills with recirculating ' +
+          'gas at a pressure of its own.' },
  ]},
  { group:'Airframe', open:true, items:[
    { k:'noseType', t:'Nose cone',            min:0,  max:2,   step:1,    v:2,    rebuild:true,
@@ -372,11 +381,19 @@ function nozzleRadii(){
   const rt = Math.min(P.throatR, P.chamR - 0.5);
   return { rt, re: Math.max(P.nozExitR, rt) };
 }
+const isSpike = () => P.nozShape === 2;
 function computeGeometry(){
   const noseLen  = (P.noseType === 0) ? 0 : P.noseLen;
   const { rt: throatR, re: nozExitR } = nozzleRadii();
   const bodyR    = Math.max(P.chamR, nozExitR) + P.wallT;
   const vehLen   = noseLen + P.foreLen + P.chamLen + P.convLen + P.divLen;
+  /* Plug nozzle. The annular throat between the cowl lip and the spike root has area
+     pi*(re^2 - r0^2), so setting r0 = sqrt(re^2 - rt^2) gives the same throat area and the
+     same expansion ratio as a bell with the same two radii. */
+  const spikeR0    = isSpike() ? Math.sqrt(Math.max(nozExitR*nozExitR - throatR*throatR, 0)) : 0;
+  const spikeFull  = P.divLen;
+  const spikeBuilt = spikeFull * P.spikeTrunc / 100;
+  const spikeBaseR = spikeR0 * Math.pow(1 - P.spikeTrunc / 100, 2);
 
   let zNose = Math.max(2.5 * bodyR, 20);
   let Lz    = zNose + vehLen + P.downrange;
@@ -390,7 +407,8 @@ function computeGeometry(){
   const zExit     = zThroat + P.divLen;
   const Rmax      = Math.max(P.rDomain * bodyR, bodyR + 25);
   return Object.assign(GEO, { noseLen, throatR, nozExitR, bodyR, vehLen,
-                              zNose, zShoulder, zInj, zConv0, zThroat, zExit, Lz, Rmax });
+                              zNose, zShoulder, zInj, zConv0, zThroat, zExit, Lz, Rmax,
+                              spikeR0, spikeFull, spikeBuilt, spikeBaseR });
 }
 
 /* ========================== 1-D isentropic reference ==========================
@@ -442,7 +460,9 @@ function derived(){
   const cstar= mdot > 0 ? pc * (At * 1e-6) / mdot : 0;
 
   // divergence half-angle and the cosine loss it costs a conical nozzle
-  const halfAngle = Math.atan2(re - rt, Math.max(P.divLen, 1e-6)) * 180 / Math.PI;
+  const halfAngle = isSpike()
+    ? Math.atan2(GEO.spikeR0 || 0, Math.max(P.divLen, 1e-6)) * 180 / Math.PI
+    : Math.atan2(re - rt, Math.max(P.divLen, 1e-6)) * 180 / Math.PI;
   const lambda = P.nozShape === 0
     ? 0.5 * (1 + Math.cos(halfAngle * Math.PI / 180))
     : 0.99;                                                  // a bell recovers most of it
@@ -483,7 +503,9 @@ function derived(){
            machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
            burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas,
            twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog),
-           fpaDeg: S.fpa * 180 / Math.PI };
+           fpaDeg: S.fpa * 180 / Math.PI,
+           spike:isSpike(), spikeR0:GEO.spikeR0 || 0, spikeBaseR:GEO.spikeBaseR || 0,
+           spikeBuilt:GEO.spikeBuilt || 0 };
 }
 
 
@@ -537,6 +559,11 @@ const PRESETS = [
  { n:'Venus surface', d:'92 bar back pressure, ε 1.1',
    p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.29, RgasALog:LOG10(191.4), pAmbLog:LOG10(9200), tAmb:737, vAmb:0,
        pcBar:250, throatR:8, nozExitR:8.25, convLen:20, divLen:12, nozShape:1, noseType:2 } },
+ { n:'Aerospike', d:'plug nozzle, ε 3.4, matched at sea level',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288,
+       gSurf:9.81, vAmb:0,
+       pcBar:20, throatR:14, nozExitR:26, convLen:20, divLen:45, nozShape:2, spikeTrunc:100,
+       noseType:2, rDomain:1.75 } },
  { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
    p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
        pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
@@ -595,7 +622,16 @@ function probeIz(){
    the nozzle exit area only: further out, the plane cuts freestream, whose momentum is not
    thrust. */
 function consumeProbeArr(buf, t){
-  const pa = pAmbPa(), rLim = GEO.nozExitR;
+  const pa = pAmbPa();
+  /* A bell discharges through a known area, so the integral is bounded by the exit radius.
+     A plug nozzle has no outer wall: the plume expands past the cowl lip by an amount that
+     depends on ambient pressure, so the boundary is taken from the exhaust tracer instead. */
+  let rLim = GEO.nozExitR;
+  if (isSpike()){
+    let irMax = 0;
+    for (let ir = 0; ir < S.Nr; ir++) if (buf[ir*8+4] > 0.02) irMax = ir;
+    rLim = Math.min((irMax + 1.5) * S.dr, 0.8 * S.Rmax);
+  }
   let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0, Taxis = 0, Yaxis = 0;
   // the axial pressure force on the external surface, summed over the stations the GPU wrote
   let drag = 0;
@@ -617,7 +653,8 @@ function consumeProbeArr(buf, t){
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
   }
-  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag, net: thrust - drag };
+  S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag,
+             net: thrust - drag, rLim };
   if (mx > S.peak){ S.peak = mx; S.peakT = t; }
   S.series.push([t, axis, mx]);
   if (S.series.length > 4000) S.series.splice(0, 2000);
@@ -647,7 +684,7 @@ const fmtP = pa => pa >= 1e5 ? (pa/1e5).toFixed(2) + ' bar'
 function updateMetrics(){
   const D = derived(),
         m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0, Taxis:0, Yaxis:0,
-                        drag:0, net:0 };
+                        drag:0, net:0, rLim:0 };
   const flags = [];
   const cellsAcrossThroat = D.rt / S.dr;
 
@@ -656,6 +693,19 @@ function updateMetrics(){
     `critical ratio of ${fmt(D.critical,2)} for γ = ${fmt(D.g,2)}. The throat stays subsonic, ` +
     `mass flow still responds to ambient pressure, and the divergent section acts as a ` +
     `diffuser. Raise chamber pressure or lower ambient pressure.`]);
+  else if (D.spike) flags.push([D.peRatio < 0.35 || D.peRatio > 2.5 ? 'warn' : 'good',
+    `<b>Plug nozzle.</b> Design exit pressure is ${fmt(D.peRatio,2)}× ambient, but the outer ` +
+    `boundary of the plume is the ambient rather than a wall, so the expansion adjusts with ` +
+    `altitude instead of being fixed. The 1-D figures above describe the design point; the ` +
+    `measured block shows what the free boundary actually does at this ambient pressure. ` +
+    `Separation inside a bell has no counterpart here; at low altitude the loss appears as a ` +
+    `shortened supersonic region on the spike. The contour is a simple algebraic curve with an ` +
+    `axial throat rather than a method-of-characteristics design with an inclined throat, and ` +
+    `recovers about 85% of ideal exhaust velocity where a bell of the same ε recovers 96%.` +
+    (P.spikeTrunc < 100
+      ? ` Truncated to ${fmt(P.spikeTrunc,0)}%, so a base of radius ${fmt(D.spikeBaseR,2)} mm ` +
+        `carries recirculating gas whose pressure adds to or subtracts from thrust.`
+      : ``)]);
   else if (D.peRatio < 0.35) flags.push(['bad',
     `<b>Heavily over-expanded; separation expected.</b> Exit pressure is ${fmt(D.peRatio,2)}× ` +
     `ambient. Below about 0.35 (Summerfield) the boundary layer separates and the shock system ` +
@@ -679,13 +729,15 @@ function updateMetrics(){
   else flags.push(['good',
     `Near-optimally expanded: exit pressure ${fmt(D.peRatio,2)}× ambient.`]);
 
-  if (cellsAcrossThroat < 6) flags.push(['bad',
-    `<b>Throat resolved by ${fmt(cellsAcrossThroat,1)} cells across the radius.</b> Below ` +
-    `about 6 the sonic line is not resolved and the mass flow is grid-dependent. Raise the ` +
-    `radial cell count, raise the throat radius, or narrow the radial domain.`]);
-  else if (cellsAcrossThroat < 10) flags.push(['warn',
-    `Throat resolved by ${fmt(cellsAcrossThroat,1)} cells across the radius. Results will ` +
-    `shift with resolution.`]);
+  const throatCells = D.spike ? (D.re - D.spikeR0) / S.dr : cellsAcrossThroat;
+  if (throatCells < 6) flags.push(['bad',
+    `<b>${D.spike ? 'Annular throat' : 'Throat'} resolved by ${fmt(throatCells,1)} cells ` +
+    `across the ${D.spike ? 'gap' : 'radius'}.</b> Below about 6 the sonic line is not ` +
+    `resolved and the mass flow is grid-dependent. Raise the radial cell count, widen the ` +
+    `throat, or narrow the radial domain.`]);
+  else if (throatCells < 10) flags.push(['warn',
+    `${D.spike ? 'Annular throat' : 'Throat'} resolved by ${fmt(throatCells,1)} cells. ` +
+    `Results will shift with resolution.`]);
 
   if (P.nozShape === 0 && D.halfAngle > 22) flags.push(['warn',
     `Conical half-angle ${fmt(D.halfAngle,1)}°, a divergence loss of ` +
@@ -780,7 +832,9 @@ function updateMetrics(){
     rows('Nozzle, 1-D ideal', [
       ['expansion ratio ε', fmt(D.eps,2) + ' : 1'],
       ['throat / exit R',   fmt(D.rt,2) + ' / ' + fmt(D.re,2) + ' mm'],
-      ['half-angle',        fmt(D.halfAngle,1) + '°' + (P.nozShape === 0 ? ` (λ ${fmt(D.lambda,3)})` : ' at exit')],
+      ['half-angle',        fmt(D.halfAngle,1) + '°' +
+                            (P.nozShape === 0 ? ` (λ ${fmt(D.lambda,3)})`
+                             : D.spike ? ' at the spike root' : ' at exit')],
       ['pressure ratio',    fmt(D.pc/D.pa,1) + ' : 1'],
       ['exit Mach',         fmt(D.Me,2)],
       ['exit pressure',     fmtP(D.pe) + ' (' + fmt(D.peRatio,2) + '× amb)'],
@@ -793,7 +847,13 @@ function updateMetrics(){
       ['c*',                fmt(D.cstar,0) + ' m/s'],
       ['Isp (vac-corrected)', fmt(D.isp,0) + ' s' + (P.nozShape === 0 ? ` → ${fmt(D.isp*D.lambda,0)} s` : '')],
       ['optimum ε here',    fmt(D.epsOpt,2) + ' : 1'],
-    ]) + '<hr>' +
+    ].concat(D.spike ? [
+      ['cowl lip radius',   fmt(D.re,2) + ' mm'],
+      ['spike root radius', fmt(D.spikeR0,2) + ' mm'],
+      ['spike built',       fmt(D.spikeBuilt,1) + ' mm of ' + fmt(P.divLen,0) +
+                            ' (' + fmt(P.spikeTrunc,0) + '%)'],
+      ['spike base radius', fmt(D.spikeBaseR,2) + ' mm'],
+    ] : [])) + '<hr>' +
     rows('Gases', [
       ['exhaust γ / M',   fmt(D.g,2) + ' / ' + fmt(D.Me_M,1) + ' g/mol'],
       ['exhaust R',       fmt(D.Rg,0) + ' J/kg·K'],
@@ -824,7 +884,9 @@ function updateMetrics(){
                         (D.thrust > 0 ? ` (${fmt(100*m.thrust/D.thrust,0)}% of ideal)` : '')],
       ['pressure drag',  fmt(m.drag,1) + ' N'],
       ['net axial force',fmt(m.net,1) + ' N'],
-    ]) + '<hr>' +
+    ].concat(D.spike ? [
+      ['plume radius here', fmt(m.rLim,1) + ' mm (lip ' + fmt(D.re,1) + ')'],
+    ] : [])) + '<hr>' +
     rows('Flight' + (!P.accelerate ? ', not flying'
                      : turning() ? ', gravity turn'
                      : climbing() ? ', vertical' : ', level'), [
@@ -911,13 +973,14 @@ struct Params {
   gas   : vec4<f32>,          // gamma_exhaust, gamma_ambient, Prandtl, rk stage weight
   gas2  : vec4<f32>,          // a_ref, spongeZ, spongeR, _
   gasB  : vec4<f32>,          // cv_exhaust, R_exhaust, cv_ambient, R_ambient
+  vehE  : vec4<f32>,          // spike root radius, spike length built, spike length full, _
 };
 @group(0) @binding(0) var<uniform> P : Params;
 `;
 
 const PARAM_STRIDE = 256;                 // uniform dynamic-offset alignment
 const PARAM_FLOATS = PARAM_STRIDE / 4;
-const PARAM_BYTES  = 192;                 // the part of a slot the struct actually covers
+const PARAM_BYTES  = 208;                 // the part of a slot the struct actually covers
 
 const WGSL_REDUCE = `
 struct RP { n : u32, first : u32, _a : u32, _b : u32 };
@@ -1053,6 +1116,8 @@ function packParams(slot, dt, weight, simT){
   // mixture rule inputs: specific heat at constant volume and gas constant, per species
   F[o+44] = P.RgasE / (P.gammaE - 1);          F[o+45] = P.RgasE;
   F[o+46] = E.Rg / (E.g - 1);                  F[o+47] = E.Rg;
+  F[o+48] = GEO.spikeR0;   F[o+49] = GEO.spikeBuilt;
+  F[o+50] = GEO.spikeFull; F[o+51] = 0;
 }
 </script>
 
@@ -1113,34 +1178,70 @@ fn cpMix(Y : f32) -> f32 { return cvMix(Y) + rMix(Y); }
 fn RHO_FLOOR() -> f32 { return 1.0e-7 * P.env.z; }
 fn P_FLOOR() -> f32 { return 1.0e-7 * P.env.y; }
 
+fn isSpike() -> bool { return P.vehC.w > 1.5; }
+
+/* Station at which the body ends. A bell ends at the exit plane; a plug nozzle ends at the
+   cowl lip, which is the throat, because past that the outer boundary of the flow is the
+   ambient rather than a wall. */
+fn zBodyEnd() -> f32 {
+  if (isSpike()) { return P.vehB.x; }
+  return P.vehB.y;
+}
+
 /* Outer surface of the vehicle at z. Negative means this station is off the vehicle. */
 fn outerR(z : f32) -> f32 {
   let zN = P.vehA.x; let zS = P.vehA.y; let bR = P.vehB.z;
-  if (z < zN || z > P.vehB.y) { return -1.0; }
+  if (z < zN || z > zBodyEnd()) { return -1.0; }
   if (z >= zS) { return bR; }
   let s = clamp((z - zN) / max(zS - zN, 1e-6), 0.0, 1.0);
   if (P.vehB.w < 1.5) { return bR * s; }                        // conical
   return bR * sqrt(max(s * (2.0 - s), 0.0));                    // ellipsoidal
 }
 
-/* The external wetted surface, as a radius that is defined everywhere: zero ahead of the
-   nose, the vehicle's outer profile along it, and the nozzle exit radius aft of the base,
-   where the surface has ended and what remains is the opening. Written
-   this way, the projected-area difference across an axial slab telescopes correctly and a
-   uniform ambient pressure integrates to exactly zero net force. */
+/* The external wetted surface, as a radius defined everywhere: zero ahead of the nose, the
+   vehicle's outer profile along it, and the opening radius aft of the base. Written this way
+   the projected-area difference across an axial slab telescopes, and a uniform ambient
+   pressure integrates to zero net force. The plug is excluded: pressure on it is thrust, and
+   is accounted for by the exit-plane momentum integral. */
 fn extR(z : f32) -> f32 {
   if (z < P.vehA.x) { return 0.0; }
-  if (z > P.vehB.y) { return P.vehC.z; }
+  if (z > zBodyEnd()) { return P.vehC.z; }
   return max(outerR(z), 0.0);
 }
 
-/* Internal cavity radius at z: chamber, raised-cosine contraction, then the divergent
-   contour. Negative means solid at every radius at this station. */
+/* Radius of the centrebody. Zero for a bell. For a plug nozzle it grows from the axis through
+   the contraction, reaching the spike root radius at the throat, then tapers as (1-s)^2 so the
+   surface leaves the throat steeply and finishes parallel to the axis. Truncation stops the
+   contour early and leaves a base. */
+fn plugR(z : f32) -> f32 {
+  if (!isSpike()) { return 0.0; }
+  let zC = P.vehA.w; let zT = P.vehB.x;
+  let r0 = P.vehE.x; let built = P.vehE.y; let full = P.vehE.z;
+  if (z < zC) { return 0.0; }
+  if (z <= zT) {
+    let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
+    return r0 * 0.5 * (1.0 - cos(PI * s));
+  }
+  let d = z - zT;
+  if (d > built) { return 0.0; }
+  let s = clamp(d / max(full, 1e-6), 0.0, 1.0);
+  return r0 * (1.0 - s) * (1.0 - s);
+}
+
+/* Outer radius of the internal cavity at z: chamber, raised-cosine contraction, then the
+   divergent contour. Negative means solid at every radius at this station. */
 fn innerR(z : f32) -> f32 {
   let zI = P.vehA.z; let zC = P.vehA.w; let zT = P.vehB.x; let zE = P.vehB.y;
-  if (z < zI || z > zE) { return -1.0; }
+  if (z < zI) { return -1.0; }
   let rc = P.vehC.x; let rt = P.vehC.y; let re = P.vehC.z;
   if (z <= zC) { return rc; }
+  if (isSpike()) {
+    // contraction runs from the chamber wall to the cowl lip; past the lip there is no wall
+    if (z > zT) { return -1.0; }
+    let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
+    return re + (rc - re) * 0.5 * (1.0 + cos(PI * s));
+  }
+  if (z > zE) { return -1.0; }
   if (z <= zT) {
     let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
     return rt + (rc - rt) * 0.5 * (1.0 + cos(PI * s));
@@ -1152,6 +1253,7 @@ fn innerR(z : f32) -> f32 {
 
 fn solidAt(p : vec2<f32>) -> i32 {
   if (P.misc.x > 0.5) { return FLUID; }                          // validation: empty domain
+  if (p.y < plugR(p.x)) { return WALL; }                         // centrebody
   let ro = outerR(p.x);
   if (ro < 0.0 || p.y >= ro) { return FLUID; }
   let ri = innerR(p.x);
@@ -2938,7 +3040,7 @@ document.getElementById('note').innerHTML =
    ========================================================================== */
 const URLKEY = {
   pcBar:'pc', Tc:'tc', riseMs:'rt', chamR:'cr', chamLen:'cl',
-  throatR:'tr', nozExitR:'er', convLen:'vl', divLen:'dl', nozShape:'ns',
+  throatR:'tr', nozExitR:'er', convLen:'vl', divLen:'dl', nozShape:'ns', spikeTrunc:'st',
   noseType:'nt', noseLen:'nl', foreLen:'fl', wallT:'wt',
   pAmbLog:'pa', tAmb:'ta', vAmb:'va',
   gammaE:'ge', RgasE:'re', gammaA:'gg', RgasALog:'ra',

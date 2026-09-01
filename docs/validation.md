@@ -88,6 +88,47 @@ predicts 9.6.
 
 Skin friction is excluded; see the note in the panel.
 
+## Aerospike
+
+Same throat area and expansion ratio as a bell, so the 1-D reference figures are identical.
+Kerolox at 20 bar into Earth air, ε 3.45, matched (pe/pa 0.99), 8.5 cells across the annular
+gap, 607 x 112 grid, t = 2 ms.
+
+| nozzle | measured ṁ | vs ideal | measured thrust | vs ideal | effective c (F/ṁ) | vs ideal |
+|---|---|---|---|---|---|---|
+| bell, ε 2.04 | 581 g/s | 83 % | 1338 N | 80 % | 2303 m/s | 96 % |
+| aerospike, ε 3.45 | 602 g/s | 86 % | 1268 N | 74 % | 2106 m/s | 85 % |
+
+The annular throat passes the right mass flow: at matched conditions and comparable resolution
+the plug nozzle and the bell agree to within a few percent, which confirms the area identity
+A_t = π(R_lip² − R_root²) = π·R_throat².
+
+The exhaust velocity deficit is the contour. The spike is a (1−s)² curve from an axial throat,
+not a method-of-characteristics design from an inclined throat, so the expansion is not
+isentropic and the flow does not leave exactly axial. An optimised contour would close most of
+the 11-point gap.
+
+Integration bound. The plume has no wall, so cumulative thrust was checked against integration
+radius at ε 2.04:
+
+| radius | 20 mm (lip) | 30 mm | 35 mm | 45 mm | 70 mm (domain) |
+|---|---|---|---|---|---|
+| cumulative thrust | 431 N | 921 N | 1195 N | 1213 N | 1176 N |
+
+Flat beyond about 35 mm, varying 1.6 % out to the domain edge, so the tracer-bounded integral
+is converged with respect to where it stops.
+
+Altitude response, ε 2.04, same geometry, bell against aerospike:
+
+| p_c | pe/pa | bell thrust vs ideal | aerospike thrust vs ideal |
+|---|---|---|---|
+| 4 bar | 0.44 (over-expanded) | 81 % | 84 % |
+| 20 bar | 2.19 (under-expanded) | 80 % | 71 % |
+
+The plug nozzle holds up marginally better when over-expanded and reads lower when
+under-expanded. At this resolution the difference is within the range set by the annular throat
+being resolved by 9 cells, so it is not a demonstration of altitude compensation.
+
 ## Two-species contact discontinuity
 
 Conservative schemes for multi-component flow can produce spurious pressure oscillations at
@@ -139,8 +180,8 @@ the cell size, so a finer grid costs both more cells and more steps.
 
 ## Shareable links
 
-Encoding a fully non-default configuration, resetting everything, then decoding restores all 45
-settings with zero mismatches. Worst-case length is 342 characters against a commonly cited safe
+Encoding a fully non-default configuration, resetting everything, then decoding restores all 46
+settings with zero mismatches. Worst-case length is 347 characters against a commonly cited safe
 limit of 2000.
 
 Values are clamped to their control's range on the way in and unknown keys are ignored, so a

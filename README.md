@@ -52,7 +52,7 @@ treat it as ordinary fluid, so mass flow through the nozzle is an output rather 
 |---|---|
 | Chamber & injector | chamber pressure, ignition rise time, chamber radius and length |
 | Propellant | six exhaust compositions as buttons; flame temperature, γ and R directly |
-| Nozzle | throat radius, exit radius, converging and diverging lengths, conical or bell contour |
+| Nozzle | throat radius, exit radius, converging and diverging lengths, conical / bell / aerospike, spike truncation |
 | Airframe | nose cone shape and length, forebody length, wall thickness |
 | Atmosphere | six worlds as buttons; ambient pressure (log, 10 Pa to 10 MPa), temperature, flight speed, surface gravity, γ and R directly |
 | Vehicle & flight | acceleration on/off, level / vertical / gravity-turn path, pitch-over speed and angle, dry and propellant mass, trajectory fast-forward |
@@ -83,9 +83,39 @@ diamonds.
 
 ![Under-expanded nozzle with a train of shock diamonds](docs/img/underexpanded.png)
 
+### Aerospike
+
+An aerospike replaces the outer wall of the divergent section with the ambient. Flow leaves an
+annular throat at the cowl lip and expands along a centrebody, so the outer boundary of the
+plume is set by ambient pressure rather than by a wall.
+
+![Aerospike, Mach number: sonic line across the annular throat, expansion along the
+spike](docs/img/aerospike-mach.png)
+
+Throat radius and exit radius keep their meaning. The exit radius is the cowl lip, and the
+spike root radius follows as √(exit² − throat²), which makes the annular throat area equal to
+π·throat². Expansion ratio, choked mass flow and the 1-D performance figures are therefore the
+same as for a bell with the same two radii, and describe the design point.
+
+The geometry: the centrebody grows from the axis through the contraction, reaching its root
+radius at the throat, then tapers as (1−s)². **Spike length built** truncates the contour early
+and leaves a base, as real plug nozzles do to save mass.
+
+Two consequences for the measurements:
+
+- The annular throat is much thinner than a circular throat of the same area, and gets thinner
+  as expansion ratio rises: at ε 3.4 the gap is a quarter of the throat radius. Plug nozzles
+  need more radial resolution than bells. The panel reports cells across the gap.
+- The plume has no wall to bound it, so the exit-plane integrals are bounded by the exhaust
+  tracer rather than by the exit radius. The panel reports the plume radius it found.
+
+The contour is a simple algebraic curve with an axial throat, not a method-of-characteristics
+design with an inclined throat. It recovers about 85 % of ideal exhaust velocity where a bell
+of the same expansion ratio recovers 96 %. See [docs/validation.md](docs/validation.md).
+
 ### Presets
 
-Eight, each setting nozzle, chamber, propellant and atmosphere together.
+Nine, each setting nozzle, chamber, propellant and atmosphere together.
 
 | preset | configuration |
 |---|---|
@@ -96,6 +126,7 @@ Eight, each setting nozzle, chamber, propellant and atmosphere together.
 | Supersonic flight | pointy nose at Mach 2 at 10 km: bow shock, shoulder expansion, base flow |
 | Mars ascent | methalox into 0.64 kPa of CO₂, pressure ratio 3141 |
 | Venus surface | 250 bar against 92 bar back pressure, ε 1.1, Isp 159 s |
+| Aerospike | plug nozzle, ε 3.4, matched at sea level |
 | Titan flight | methalox at Mach 1.5 through cold dense nitrogen, with entrainment |
 
 ---
@@ -126,8 +157,9 @@ aerodynamic body.
 
 Two integrals over separate surfaces.
 
-**Thrust** is the momentum-plus-pressure integral across the nozzle exit plane, over the exit
-area only: ∫(ρu² + p − p_ambient) dA.
+**Thrust** is the momentum-plus-pressure integral across the nozzle exit plane,
+∫(ρu² + p − p_ambient) dA, bounded by the exit radius for a bell and by the exhaust tracer for
+a plug nozzle.
 
 **Drag** is the (p − p_ambient) integral over the external wetted surface: nose, body and base
 annulus. It is computed one axial slab per thread. Each slab's surface spans a range of radii,
