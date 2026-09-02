@@ -88,82 +88,118 @@ predicts 9.6.
 
 Skin friction is excluded; see the note in the panel.
 
+## Cut cells
+
+Solid cells are masked rather than cut, so a wall that crosses a cell at an angle used to be
+rounded to whole cells. Each cell now also carries the fraction of its volume that is fluid and
+the open fraction of each of its faces, sampled 8 x 8 from the same `solidAt` that defines every
+other shape in the tool. Face fluxes are weighted by the open fraction, and the force the wall
+exerts follows from the aperture imbalance, which carries the true surface normal without that
+normal ever being formed: a uniform pressure over a closed surface exerts no net force, so the
+imbalance fixes the wall term exactly. With every aperture open the term reduces to `p/r`, the
+usual axisymmetric source, so an uncut cell is untouched.
+
+The fluid fraction is carried but not used to divide the flux sum. Dividing by it is the
+textbook cut cell and is conservative, but a sliver cell then sets the timestep for the whole
+grid: at a fluid fraction of 0.15 the effective CFL is nearly seven, and the solver diverges in
+under 10 microseconds. Using the full cell volume leaves a local O(h) smearing at the wall, the
+same order the scheme already carries there.
+
+No change to the cases that were already converged: the reference bell reads 90 % of ideal mass
+flow against 91 % before, on-axis exhaust velocity 2636 m/s against 2631, and flat-nose drag at
+Mach 2 is 257 N (C_D 1.48) against 261 N (C_D 1.50).
+
 ## Aerospike
 
 The plug nozzle is a method-of-characteristics contour whose annular throat area is set equal to
 pi*throat^2, so the 1-D reference figures are the same as for a bell with the same throat and
 exit radii.
 
-Geometry check, run against the built contour rather than against the design formulae. Walking
-the cowl surface and taking, for each point, the smallest revolved area of a segment spanning to
-the centrebody gives a minimum passage area of 615.8 mm^2 against a design throat area of
-615.8 mm^2, on the slant from the spike root to the cowl lip. There is no unintended constriction
-anywhere else in the passage, and the throat is where the construction puts it.
+### Geometry
+
+The throat is inclined at the Prandtl-Meyer angle of the exit Mach number, which is 48 degrees
+at epsilon 3.45, so the flow has to be turned from axial before it gets there. The turn is a
+pair of circular arcs about a common centre, one for the centrebody and one for the cowl, three
+gap widths in radius. Concentric arcs keep the gap constant through the turn, which makes the
+passage area fall monotonically to exactly the throat area and no further. Upstream of the turn
+the centrebody is a cylinder and the cowl carries the whole contraction on a curve that is flat
+at both ends, so the inner wall has no curvature for the flow to separate off.
+
+Checked against the built geometry rather than the design formulae: walking the cowl surface and
+taking, for each point, the smallest revolved area of a segment spanning to the centrebody gives
+a minimum passage area equal to the design throat area to three figures, on the slant from the
+spike root to the cowl lip, at every expansion ratio from 1.07 to 8.2.
+
+The first version of this used cubic Hermite curves for both walls, with zero slope at the
+chamber and the throat angle at the root. Over a convergent section long compared with the
+radius change, that curve overshoots: the centrebody bulged outward and reached 56 degrees in
+mid-section before flattening to the design angle, and the flow separated off it. Measured mass
+flow at epsilon 1.31 was 75 % of ideal with the Hermite contour and is 89 % with the arcs.
+
+### Discharge
+
+Kerolox at 20 bar into still Earth air, throat 14 mm, 192 radial cells, t = 2.2 ms. Expansion
+ratio sets both the throat angle and the width of the annular gap.
+
+| epsilon | throat angle | gap | cells across gap | mdot vs ideal | c vs ideal |
+|---|---|---|---|---|---|
+| 1.07 | 6.7 deg | 10.6 mm | 30.9 | 91 % | 99 % |
+| 1.31 | 17.3 deg | 8.1 mm | 23.5 | 89 % | 99 % |
+| 1.99 | 32.9 deg | 5.6 mm | 16.4 | 81 % | 96 % |
+| 3.45 | 48.0 deg | 4.0 mm | 11.4 | 69 % | 93 % |
+| 3.45, 320 cells | 48.0 deg | 4.0 mm | 18.9 | 74 % | 102 % |
+
+At a wide gap the plug nozzle matches the bell exactly: 91 % is what the bell reads at the same
+chamber conditions. The deficit appears as the gap narrows, and it is mass flow only. Effective
+exhaust velocity stays within a few percent of ideal throughout, which is what makes the
+altitude comparison below usable.
+
+Four things it is not. It is not the geometry: the minimum passage area is the design throat
+area to three figures. It is not stagnation pressure loss upstream: following the peak-Mach
+streamline, total pressure holds at 18.8 to 19.1 bar from the injector all the way to M = 1.06,
+against 19.0 bar in the chamber. It is not viscous: with molecular viscosity and the Smagorinsky
+constant both set to zero the reading moves by one point. It is not the measurement: integrating
+the propellant mass flux across successive axial planes gives 76 % at the throat itself and 74 %
+at the exit plane 60 mm downstream, with nothing entering the radial sponge.
+
+What is left is the wall treatment inside a narrow slot. The flux profile across the throat shows
+a healthy sonic core with low-momentum layers on both walls, and those layers are a roughly fixed
+number of cells thick, so they cost a share of the gap that grows as the gap narrows. Turn radius
+confirms it: at epsilon 3.45 a radius of 1.5 gap widths reads 72 %, 3 reads 70 % and 6 reads
+62 %, which tracks the length of narrow annulus the flow has to traverse rather than the
+sharpness of the turn. Three gap widths is kept, being the usual floor for turning a duct without
+separating the inner wall.
+
+The panel reports cells across the gap and asks for 25.
 
 ### Altitude response
 
-Kerolox, throat 14 mm, exit 26 mm, epsilon 3.45, chamber 38 mm, into still Earth air at 101 kPa.
-Bell and aerospike on an identical 846 x 192 grid, 7.8 cells across the annular gap, t = 2.2 ms.
-Chamber pressure sets the expansion condition.
+Bell and aerospike, same throat area and expansion ratio 3.45, identical grid and domain,
+t = 2.2 ms. Chamber pressure sets the expansion condition.
 
-| p_c | p_e/p_a | nozzle | measured mdot | vs ideal | thrust | vs ideal | c = F/mdot | vs ideal |
-|---|---|---|---|---|---|---|---|---|
-| 5 bar | 0.25, over-expanded | bell | 162 g/s | 93 % | 274 N | 102 % | 1690 m/s | 110 % |
-| 5 bar | 0.25, over-expanded | aerospike | 117 g/s | 67 % | 192 N | 72 % | 1639 m/s | 107 % |
-| 20 bar | 0.99, matched | bell | 640 g/s | 92 % | 1521 N | 88 % | 2375 m/s | 96 % |
-| 20 bar | 0.99, matched | aerospike | 520 g/s | 74 % | 1202 N | 70 % | 2313 m/s | 94 % |
-| 60 bar | 2.96, under-expanded | bell | 1915 g/s | 91 % | 4983 N | 89 % | 2602 m/s | 98 % |
-| 60 bar | 2.96, under-expanded | aerospike | 1523 g/s | 73 % | 3874 N | 69 % | 2544 m/s | 95 % |
+| p_c | p_e/p_a | nozzle | mdot | vs ideal | thrust | c = F/mdot | vs ideal |
+|---|---|---|---|---|---|---|---|
+| 5 bar | 0.25, over-expanded | bell | 160 g/s | 92 % | 274 N | 1710 m/s | 111 % |
+| 5 bar | 0.25, over-expanded | aerospike | 131 g/s | 75 % | 222 N | 1695 m/s | 110 % |
+| 20 bar | 0.99, matched | bell | 639 g/s | 92 % | 1517 N | 2373 m/s | 96 % |
+| 20 bar | 0.99, matched | aerospike | 466 g/s | 67 % | 1057 N | 2266 m/s | 92 % |
+| 60 bar | 2.96, under-expanded | bell | 1917 g/s | 91 % | 4976 N | 2596 m/s | 97 % |
+| 60 bar | 2.96, under-expanded | aerospike | 1411 g/s | 67 % | 3570 N | 2531 m/s | 95 % |
 
-Effective exhaust velocity, aerospike divided by bell: 0.970 at p_e/p_a 0.25, 0.974 at 0.99,
-0.978 at 2.96. Flat to under one percent across a 12:1 range of chamber pressure.
+Effective exhaust velocity, aerospike divided by bell: 0.991 over-expanded, 0.955 matched, 0.975
+under-expanded. The plug nozzle is closest to the bell at the over-expanded end, which is the
+direction compensation would push, but the margin is a few percent across a 12:1 range of
+chamber pressure.
 
-No altitude compensation is visible at this expansion ratio, and the flatness of that ratio says
-why: the bell is not losing anything for the plug nozzle to recover. Both readings above 100 %
-in the over-expanded row are the 1-D reference being wrong rather than the solver being
-optimistic. Fixed-geometry 1-D theory charges the full (p_e - p_a)*A_e debit over the whole exit
-area, which assumes the nozzle flows full; the real over-expanded bell separates, and the
-recirculating gas downstream of separation sits nearer ambient, so it pays less than the debit.
-Separation is the bell's own compensation mechanism at modest epsilon. The configurations where
-plug nozzles win are high expansion ratios, where separation moves far enough up the bell to be
-destructive; the annular gap at those ratios is a small fraction of the throat radius and is not
-resolvable on this grid.
-
-### Discharge coefficient
-
-The aerospike passes 73 % of ideal choked mass flow where the bell passes 91 %. Three
-measurements localise it.
-
-Station scan, propellant mass flux integrated across successive axial planes from just past the
-throat to 90 mm downstream of the exit, at 1128 x 256:
-
-| station | throat+1 | +5 | +15 | +30 | +45 | exit | +40 | +90 |
-|---|---|---|---|---|---|---|---|---|
-| mdot | 512 g/s | 513 | 506 | 506 | 508 | 517 | 492 | 499 |
-
-Flat at 73 % from the throat outward, with nothing entering the radial sponge, so no mass is
-lost in the plume. The throat itself passes 73 %.
-
-Resolution, same configuration:
-
-| radial cells | cells across gap | grid | mdot vs ideal | thrust vs ideal | c vs ideal |
-|---|---|---|---|---|---|
-| 128 | 5.2 | 564 x 128 | 66 % | 58 % | 89 % |
-| 192 | 7.8 | 846 x 192 | 73 % | 73 % | 100 % |
-| 256 | 10.3 | 1128 x 256 | 73 % | 71 % | 97 % |
-
-Exhaust velocity converges. Mass flow does not; it plateaus at 73 %.
-
-Viscosity, at 192 radial cells: 73 % viscous against 72 % with molecular viscosity and the
-Smagorinsky constant both set to zero. The deficit is not boundary-layer displacement.
-
-What remains is the wall representation. Solid cells are masked, not cut, so a wall is a
-staircase. The throat here is inclined 48 degrees to an axis-aligned grid, which is the worst
-case for a staircase, and the blockage is roughly one cell on each of the two walls bounding a
-gap 10 cells wide. A bell throat, whose wall is nearly parallel to the axis at the same station,
-does not pay it. The bias is numerical and it cancels out of F/mdot, which is why exhaust
-velocity converges while mass flow does not. Rank plug-nozzle designs on effective exhaust
-velocity.
+No useful altitude compensation at this expansion ratio, and the reason is visible in the
+over-expanded row: both nozzles read above 100 % of the 1-D figure there. Fixed-geometry theory
+charges the full (p_e - p_a)*A_e debit over the whole exit area, which assumes the nozzle flows
+full; the real over-expanded bell separates, and the recirculating gas downstream of separation
+sits nearer ambient, so it pays less than the debit. Separation is the bell's own compensation
+mechanism at modest epsilon, and there is little for a plug nozzle to recover. Plug nozzles win
+at high expansion ratios, where separation moves far enough up the bell to be destructive; the
+annular gap at those ratios is a small fraction of the throat radius and is not resolvable on
+this grid.
 
 ### Integration bound
 

@@ -89,8 +89,8 @@ An aerospike replaces the outer wall of the divergent section with the ambient. 
 annular throat at the cowl lip and expands along a centrebody, so the outer boundary of the
 plume is set by ambient pressure rather than by a wall.
 
-![Aerospike, Mach number: annular chamber around the centrebody, sonic line at the cowl lip,
-supersonic expansion along the spike](docs/img/aerospike-mach.png)
+![Aerospike, Mach number: annular chamber around the centrebody, the turn into the annular
+throat, and supersonic expansion along the spike](docs/img/aerospike-mach.png)
 
 Throat radius and exit radius keep their meaning. The exit radius is the cowl lip, and the rest
 of the geometry is derived from those two numbers so that the annular throat area equals
@@ -99,30 +99,34 @@ same as for a bell with the same two radii, and describe the design point.
 
 The centrebody is a method-of-characteristics contour, built by the Angelino
 straight-characteristic construction: exit Mach number comes from the area ratio, and the
-surface is the streamline that turns the flow from the throat direction back to axial through a
-single Prandtl-Meyer expansion centred on the lip. The throat is the slant line from the spike
-root to the lip, inclined at the Prandtl-Meyer angle of the exit Mach number, 48 degrees at
-epsilon 3.45. Both the cowl and the centrebody arrive at the throat on that slope, and the
-chamber is an annulus around the centrebody rather than a cylinder, so setting an aerospike
-raises the chamber radius to hold the contraction ratio. **Spike length built** truncates the
-contour early and leaves a base, as real plug nozzles do to save mass.
+surface is the streamline that turns the flow back to axial through a single Prandtl-Meyer
+expansion centred on the lip. That puts the throat on a slant inclined at the Prandtl-Meyer
+angle of the exit Mach number, 48 degrees at epsilon 3.45, so the flow has to be turned before
+it reaches the throat. The turn is a pair of circular arcs about a common centre, three gap
+widths in radius, which holds the gap constant through the turn and brings the passage area down
+to the throat area and no further. Upstream of the turn the centrebody is a cylinder and the
+cowl carries the contraction, so the chamber is an annulus and setting an aerospike raises the
+chamber radius to hold the contraction ratio. **Spike length built** truncates the contour early
+and leaves a base, as real plug nozzles do to save mass.
 
 Three consequences for the measurements:
 
 - The annular throat is much thinner than a circular throat of the same area, and gets thinner
-  as expansion ratio rises: at epsilon 3.45 the gap is a fifth of the throat radius. Plug
-  nozzles need more radial resolution than bells. The panel reports cells across the gap.
+  as expansion ratio rises: at epsilon 3.45 the gap is 4 mm against a 14 mm throat radius. Plug
+  nozzles need more radial resolution than bells. The panel reports cells across the gap and
+  asks for 25.
 - The plume has no wall to bound it, so the exit-plane integrals are bounded by the exhaust
   tracer rather than by the exit radius. The panel reports the plume radius it found.
-- Mass flow and thrust both read about 25 % low. The throat is inclined 48 degrees to an
-  axis-aligned grid, so the staircased wall blocks part of it. The bias is numerical, it does
-  not respond to viscosity or to resolution over the range tested, and it cancels out of thrust
-  divided by mass flow. Rank plug-nozzle designs on effective exhaust velocity, not on the
-  absolute thrust figure.
+- Mass flow is under-read once the gap is narrow. With a wide gap the plug nozzle matches a bell
+  exactly, at 91 % of the choked-throat figure; by epsilon 3.45 it reads about 70 %. The cause
+  is the wall treatment inside a narrow slot, and it falls with resolution. Effective exhaust
+  velocity is not affected and stays within a few percent of ideal, so rank plug-nozzle designs
+  on that rather than on absolute thrust.
 
-Effective exhaust velocity comes out at 94-95 % of ideal, and tracks a bell of the same throat
-area and expansion ratio to within 3 % from heavily over-expanded to strongly under-expanded.
-See [docs/validation.md](docs/validation.md).
+Compared against a bell of the same throat area and expansion ratio, effective exhaust velocity
+comes out within 5 % from heavily over-expanded to strongly under-expanded, with no useful
+altitude compensation at this expansion ratio. See
+[docs/validation.md](docs/validation.md) for why, and for the measurements behind all of this.
 
 ### Presets
 
