@@ -89,29 +89,40 @@ An aerospike replaces the outer wall of the divergent section with the ambient. 
 annular throat at the cowl lip and expands along a centrebody, so the outer boundary of the
 plume is set by ambient pressure rather than by a wall.
 
-![Aerospike, Mach number: sonic line across the annular throat, expansion along the
-spike](docs/img/aerospike-mach.png)
+![Aerospike, Mach number: annular chamber around the centrebody, sonic line at the cowl lip,
+supersonic expansion along the spike](docs/img/aerospike-mach.png)
 
-Throat radius and exit radius keep their meaning. The exit radius is the cowl lip, and the
-spike root radius follows as √(exit² − throat²), which makes the annular throat area equal to
-π·throat². Expansion ratio, choked mass flow and the 1-D performance figures are therefore the
+Throat radius and exit radius keep their meaning. The exit radius is the cowl lip, and the rest
+of the geometry is derived from those two numbers so that the annular throat area equals
+pi*throat^2. Expansion ratio, choked mass flow and the 1-D performance figures are therefore the
 same as for a bell with the same two radii, and describe the design point.
 
-The geometry: the centrebody grows from the axis through the contraction, reaching its root
-radius at the throat, then tapers as (1−s)². **Spike length built** truncates the contour early
-and leaves a base, as real plug nozzles do to save mass.
+The centrebody is a method-of-characteristics contour, built by the Angelino
+straight-characteristic construction: exit Mach number comes from the area ratio, and the
+surface is the streamline that turns the flow from the throat direction back to axial through a
+single Prandtl-Meyer expansion centred on the lip. The throat is the slant line from the spike
+root to the lip, inclined at the Prandtl-Meyer angle of the exit Mach number, 48 degrees at
+epsilon 3.45. Both the cowl and the centrebody arrive at the throat on that slope, and the
+chamber is an annulus around the centrebody rather than a cylinder, so setting an aerospike
+raises the chamber radius to hold the contraction ratio. **Spike length built** truncates the
+contour early and leaves a base, as real plug nozzles do to save mass.
 
-Two consequences for the measurements:
+Three consequences for the measurements:
 
 - The annular throat is much thinner than a circular throat of the same area, and gets thinner
-  as expansion ratio rises: at ε 3.4 the gap is a quarter of the throat radius. Plug nozzles
-  need more radial resolution than bells. The panel reports cells across the gap.
+  as expansion ratio rises: at epsilon 3.45 the gap is a fifth of the throat radius. Plug
+  nozzles need more radial resolution than bells. The panel reports cells across the gap.
 - The plume has no wall to bound it, so the exit-plane integrals are bounded by the exhaust
   tracer rather than by the exit radius. The panel reports the plume radius it found.
+- Mass flow and thrust both read about 25 % low. The throat is inclined 48 degrees to an
+  axis-aligned grid, so the staircased wall blocks part of it. The bias is numerical, it does
+  not respond to viscosity or to resolution over the range tested, and it cancels out of thrust
+  divided by mass flow. Rank plug-nozzle designs on effective exhaust velocity, not on the
+  absolute thrust figure.
 
-The contour is a simple algebraic curve with an axial throat, not a method-of-characteristics
-design with an inclined throat. It recovers about 85 % of ideal exhaust velocity where a bell
-of the same expansion ratio recovers 96 %. See [docs/validation.md](docs/validation.md).
+Effective exhaust velocity comes out at 94-95 % of ideal, and tracks a bell of the same throat
+area and expansion ratio to within 3 % from heavily over-expanded to strongly under-expanded.
+See [docs/validation.md](docs/validation.md).
 
 ### Presets
 
@@ -126,7 +137,7 @@ Nine, each setting nozzle, chamber, propellant and atmosphere together.
 | Supersonic flight | pointy nose at Mach 2 at 10 km: bow shock, shoulder expansion, base flow |
 | Mars ascent | methalox into 0.64 kPa of CO₂, pressure ratio 3141 |
 | Venus surface | 250 bar against 92 bar back pressure, ε 1.1, Isp 159 s |
-| Aerospike | plug nozzle, ε 3.4, matched at sea level |
+| Aerospike | plug nozzle, ε 3.45, matched at sea level |
 | Titan flight | methalox at Mach 1.5 through cold dense nitrogen, with entrainment |
 
 ---

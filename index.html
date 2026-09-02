@@ -186,7 +186,9 @@ const CONTROLS = [
           'The subsonic flow here is insensitive to the shape.' },
    { k:'divLen',   t:'Diverging length',     min:2,  max:250, step:1,    v:25,   unit:'mm', rebuild:true,
      hint:'Sets the divergence half-angle, and with it the cosine loss and the separation ' +
-          'margin. 12 to 18° is the usual conical range.' },
+          'margin. 12 to 18° is the usual conical range. Conical and bell only: an aerospike ' +
+          'contour has one length that satisfies the characteristics, so its spike length ' +
+          'follows from the two radii and is set by <b>spike length built</b> instead.' },
    { k:'nozShape', t:'Nozzle type',           min:0,  max:2,   step:1,    v:1,    rebuild:true,
      choices:['Conical (straight)','Bell (parabolic)','Aerospike (plug)'],
      hint:'Conical is a straight line from throat to exit. A bell turns the flow sharply just ' +
@@ -377,38 +379,59 @@ const GEO = {};
 /* The two radii the sliders cannot be allowed to contradict: a throat wider than the
    chamber, or an exit narrower than the throat. Derived from P rather than from GEO so the
    panel tracks a slider being dragged, before the grid has been rebuilt. */
+function isSpike(){ return P.nozShape === 2; }
 function nozzleRadii(){
-  const rt = Math.min(P.throatR, P.chamR - 0.5);
+  // a bell throat has to fit inside the chamber; a plug nozzle instead widens the chamber
+  const rt = isSpike() ? P.throatR : Math.min(P.throatR, P.chamR - 0.5);
   return { rt, re: Math.max(P.nozExitR, rt) };
 }
-const isSpike = () => P.nozShape === 2;
 function computeGeometry(){
   const noseLen  = (P.noseType === 0) ? 0 : P.noseLen;
   const { rt: throatR, re: nozExitR } = nozzleRadii();
-  const bodyR    = Math.max(P.chamR, nozExitR) + P.wallT;
-  const vehLen   = noseLen + P.foreLen + P.chamLen + P.convLen + P.divLen;
-  /* Plug nozzle. The annular throat between the cowl lip and the spike root has area
-     pi*(re^2 - r0^2), so setting r0 = sqrt(re^2 - rt^2) gives the same throat area and the
-     same expansion ratio as a bell with the same two radii. */
-  const spikeR0    = isSpike() ? Math.sqrt(Math.max(nozExitR*nozExitR - throatR*throatR, 0)) : 0;
-  const spikeFull  = P.divLen;
-  const spikeBuilt = spikeFull * P.spikeTrunc / 100;
-  const spikeBaseR = spikeR0 * Math.pow(1 - P.spikeTrunc / 100, 2);
 
+  /* Plug nozzle. Contour, root radius and natural spike length all follow from the throat
+     area and the expansion ratio. The throat is inclined at nu_e, which puts the spike root
+     upstream of the cowl lip and requires both walls to arrive there at that angle, so the
+     chamber has to be annular: a centrebody runs from the injector face to the root. The
+     chamber radius is raised if necessary to keep the annulus at four times the throat area.
+     divLen does not apply. */
+  const SPK = isSpike() ? spikeContour(throatR, nozExitR, P.gammaE) : null;
+  const spikeR0    = SPK ? SPK.r0 : 0;
+  const spikeFull  = SPK ? SPK.full : P.divLen;
+  const spikeBuilt = spikeFull * P.spikeTrunc / 100;
+  const spikeTable = SPK ? SPK.table : null;
+  const spikeNue   = SPK ? SPK.nue * 180 / Math.PI : 0;
+  const spikeSlope = SPK ? Math.tan(SPK.nue) : 0;
+  const contract   = 4 * Math.PI * throatR * throatR;              // chamber annulus area
+  const chamR      = SPK
+    ? Math.max(P.chamR, Math.sqrt((spikeR0 + 2) * (spikeR0 + 2) + contract / Math.PI))
+    : P.chamR;
+  const plugChamR  = SPK ? Math.sqrt(Math.max(chamR * chamR - contract / Math.PI, 0)) : 0;
+
+  const bodyR    = Math.max(chamR, nozExitR) + P.wallT;
+  const vehLen   = noseLen + P.foreLen + P.chamLen + P.convLen +
+                   (isSpike() ? 0 : P.divLen);
+  const aft = vehLen + (isSpike() ? spikeFull : 0);
   let zNose = Math.max(2.5 * bodyR, 20);
-  let Lz    = zNose + vehLen + P.downrange;
+  let Lz    = zNose + aft + P.downrange;
   zNose     = Math.max(zNose, 0.13 * Lz);        // clear of the inlet sponge
-  Lz        = zNose + vehLen + P.downrange;
+  Lz        = zNose + aft + P.downrange;
 
   const zShoulder = zNose + noseLen;
   const zInj      = zShoulder + P.foreLen;
   const zConv0    = zInj + P.chamLen;
-  const zThroat   = zConv0 + P.convLen;
-  const zExit     = zThroat + P.divLen;
+  const zThroat   = zConv0 + P.convLen;                  // cowl lip for a plug nozzle
+  const zRoot     = zThroat + (SPK ? SPK.zRootRel : 0);  // spike root, upstream of the lip
+  const zExit     = SPK ? zRoot + spikeFull : zThroat + P.divLen;
   const Rmax      = Math.max(P.rDomain * bodyR, bodyR + 25);
-  return Object.assign(GEO, { noseLen, throatR, nozExitR, bodyR, vehLen,
+  return Object.assign(GEO, { noseLen, throatR, nozExitR, bodyR, vehLen, chamR, plugChamR,
                               zNose, zShoulder, zInj, zConv0, zThroat, zExit, Lz, Rmax,
-                              spikeR0, spikeFull, spikeBuilt, spikeBaseR });
+                              spikeR0, spikeFull, spikeBuilt, spikeTable, spikeNue, spikeSlope,
+                              zRoot,
+                              spikeBaseR: spikeTable
+                                ? spikeTable[Math.min(SPIKE_N - 1,
+                                    Math.round((SPIKE_N - 1) * P.spikeTrunc / 100))]
+                                : 0 });
 }
 
 /* ========================== 1-D isentropic reference ==========================
@@ -428,6 +451,51 @@ function machFromArea(eps, g){
   }
   return 0.5 * (lo + hi);
 }
+/* Prandtl-Meyer function: the angle through which a sonic stream must turn to reach M. */
+function nuPM(M, g){
+  if (M <= 1) return 0;
+  const a = Math.sqrt((g + 1) / (g - 1));
+  const b = Math.sqrt(M * M - 1);
+  return a * Math.atan(b / a) - Math.atan(b);
+}
+
+/* Plug-nozzle contour by the straight-characteristic (Angelino) construction. All expansion
+   waves are taken to originate at the cowl lip, and the flow along each characteristic is
+   uniform at Mach M with direction phi = nu_e - nu(M). Mass conservation across the
+   characteristic, whose revolved area is pi(Re^2 - r^2)/sin(alpha), gives
+
+     Re^2 - r^2 = A_t (A/A*) sin(alpha) / (pi sin(mu)),   alpha = phi + mu
+
+   which returns r = 0 at M = Me and the inclined-throat root radius at M = 1. The contour is
+   resampled onto a uniform axial grid so the shader can look it up in constant time. */
+const SPIKE_N = 128;
+function spikeContour(rt, re, g){
+  const At = Math.PI * rt * rt, eps = (re / rt) * (re / rt);
+  const Me = machFromArea(eps, g), nue = nuPM(Me, g);
+  const pts = [];
+  const K = 600;
+  for (let i = 0; i <= K; i++){
+    const M = Math.max(1 + (Me - 1) * (i / K), 1 + 1e-9);
+    const mu = Math.asin(1 / M), alpha = nue - nuPM(M, g) + mu;
+    const r2 = re*re - At * areaRatio(M, g) * Math.sin(alpha) / (Math.PI * Math.sin(mu));
+    const r = Math.sqrt(Math.max(r2, 0));
+    pts.push([(re - r) / Math.tan(alpha), r]);        // axial offset from the lip, radius
+  }
+  const zRootRel = pts[0][0], zTipRel = pts[K][0];
+  const full = Math.max(zTipRel - zRootRel, 1e-6);
+  // uniform resample; the parametric z is monotonic so a single sweep suffices
+  const table = new Float32Array(SPIKE_N);
+  let j = 0;
+  for (let i = 0; i < SPIKE_N; i++){
+    const z = zRootRel + full * i / (SPIKE_N - 1);
+    while (j < K - 1 && pts[j + 1][0] < z) j++;
+    const [z0, r0] = pts[j], [z1, r1] = pts[j + 1];
+    const t = z1 > z0 ? (z - z0) / (z1 - z0) : 0;
+    table[i] = r0 + (r1 - r0) * Math.min(Math.max(t, 0), 1);
+  }
+  return { Me, nue, r0:pts[0][1], zRootRel, full, table };
+}
+
 const machFromPressureRatio = (p0OverP, g) =>
   Math.sqrt(Math.max(0, 2 / (g - 1) * (Math.pow(p0OverP, (g - 1) / g) - 1)));
 
@@ -505,7 +573,7 @@ function derived(){
            twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog),
            fpaDeg: S.fpa * 180 / Math.PI,
            spike:isSpike(), spikeR0:GEO.spikeR0 || 0, spikeBaseR:GEO.spikeBaseR || 0,
-           spikeBuilt:GEO.spikeBuilt || 0 };
+           spikeBuilt:GEO.spikeBuilt || 0, spikeNue:GEO.spikeNue || 0 };
 }
 
 
@@ -559,11 +627,11 @@ const PRESETS = [
  { n:'Venus surface', d:'92 bar back pressure, ε 1.1',
    p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.29, RgasALog:LOG10(191.4), pAmbLog:LOG10(9200), tAmb:737, vAmb:0,
        pcBar:250, throatR:8, nozExitR:8.25, convLen:20, divLen:12, nozShape:1, noseType:2 } },
- { n:'Aerospike', d:'plug nozzle, ε 3.4, matched at sea level',
+ { n:'Aerospike', d:'plug nozzle, ε 3.45, matched at sea level',
    p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288,
        gSurf:9.81, vAmb:0,
-       pcBar:20, throatR:14, nozExitR:26, convLen:20, divLen:45, nozShape:2, spikeTrunc:100,
-       noseType:2, rDomain:1.75 } },
+       pcBar:20, throatR:14, nozExitR:26, chamR:38, convLen:20, nozShape:2, spikeTrunc:100,
+       noseType:2, rDomain:1.6, res:192, downrange:250 } },
  { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
    p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
        pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
@@ -699,9 +767,12 @@ function updateMetrics(){
     `altitude instead of being fixed. The 1-D figures above describe the design point; the ` +
     `measured block shows what the free boundary actually does at this ambient pressure. ` +
     `Separation inside a bell has no counterpart here; at low altitude the loss appears as a ` +
-    `shortened supersonic region on the spike. The contour is a simple algebraic curve with an ` +
-    `axial throat rather than a method-of-characteristics design with an inclined throat, and ` +
-    `recovers about 85% of ideal exhaust velocity where a bell of the same ε recovers 96%.` +
+    `shortened supersonic region on the spike. The contour is a method-of-characteristics ` +
+    `design, and recovers 94-95% of ideal exhaust velocity, matching a bell of the same ε to ` +
+    `within 3% across a 12:1 range of ambient pressure. Mass flow and thrust both read about ` +
+    `25% low: the throat is inclined ${fmt(D.spikeNue,0)}° to an axis-aligned grid, so the ` +
+    `staircased wall blocks part of it. That bias is numerical and cancels out of F/ṁ, so rank ` +
+    `designs on effective exhaust velocity rather than on the absolute thrust figure.` +
     (P.spikeTrunc < 100
       ? ` Truncated to ${fmt(P.spikeTrunc,0)}%, so a base of radius ${fmt(D.spikeBaseR,2)} mm ` +
         `carries recirculating gas whose pressure adds to or subtracts from thrust.`
@@ -973,14 +1044,18 @@ struct Params {
   gas   : vec4<f32>,          // gamma_exhaust, gamma_ambient, Prandtl, rk stage weight
   gas2  : vec4<f32>,          // a_ref, spongeZ, spongeR, _
   gasB  : vec4<f32>,          // cv_exhaust, R_exhaust, cv_ambient, R_ambient
-  vehE  : vec4<f32>,          // spike root radius, spike length built, spike length full, _
+  vehE  : vec4<f32>,          // spike root radius, length built, length full, z of the root
+  vehF  : vec4<f32>,          // centrebody radius in the chamber, throat slope, chamberR, _
 };
 @group(0) @binding(0) var<uniform> P : Params;
+/* Plug-nozzle contour, resampled onto a uniform axial grid so the lookup is constant time:
+   solidAt runs many times per cell per step and cannot afford a search. */
+@group(0) @binding(1) var<uniform> SPK : array<vec4<f32>, 32>;
 `;
 
 const PARAM_STRIDE = 256;                 // uniform dynamic-offset alignment
 const PARAM_FLOATS = PARAM_STRIDE / 4;
-const PARAM_BYTES  = 208;                 // the part of a slot the struct actually covers
+const PARAM_BYTES  = 224;                 // the part of a slot the struct actually covers
 
 const WGSL_REDUCE = `
 struct RP { n : u32, first : u32, _a : u32, _b : u32 };
@@ -1043,9 +1118,9 @@ async function wgpuInit(){
   const bad = info.messages.filter(x => x.type === 'error');
   if (bad.length) fatal('reduction kernel: ' + bad[0].message);
 
-  const uni = dyn => ({ binding:0, visibility:GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
-                        buffer:{ type:'uniform', hasDynamicOffset:!!dyn } });
-  WG.bglP = dev.createBindGroupLayout({ entries:[uni(true)] });
+  const uni = (b, dyn) => ({ binding:b, visibility:GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
+                             buffer:{ type:'uniform', hasDynamicOffset:!!dyn } });
+  WG.bglP = dev.createBindGroupLayout({ entries:[uni(0, true), uni(1, false)] });
   WG.bglS = dev.createBindGroupLayout({ entries:[
     { binding:0, visibility:GPUShaderStage.FRAGMENT, buffer:{ type:'uniform' } } ] });
   WG.bglRP = dev.createBindGroupLayout({ entries:[
@@ -1065,8 +1140,11 @@ async function wgpuInit(){
   WG.paramHost = new ArrayBuffer(PARAM_STRIDE * 2048);
   WG.paramF = new Float32Array(WG.paramHost);
   WG.paramI = new Int32Array(WG.paramHost);
+  WG.buf.spike = dev.createBuffer({ size: SPIKE_N * 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   WG.bgP = dev.createBindGroup({ layout:WG.bglP, entries:[
-    { binding:0, resource:{ buffer:WG.buf.params, size:PARAM_BYTES } }] });
+    { binding:0, resource:{ buffer:WG.buf.params, size:PARAM_BYTES } },
+    { binding:1, resource:{ buffer:WG.buf.spike } }] });
 
   WG.buf.showU = dev.createBuffer({ size:32,
     usage:GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -1099,7 +1177,7 @@ function packParams(slot, dt, weight, simT){
   F[o+8]  = S.Rmax;   F[o+9]  = E.pa;      F[o+10] = E.rhoA;    F[o+11] = E.vInf;
   F[o+12] = GEO.zNose;F[o+13] = GEO.zShoulder; F[o+14] = GEO.zInj; F[o+15] = GEO.zConv0;
   F[o+16] = GEO.zThroat; F[o+17] = GEO.zExit; F[o+18] = GEO.bodyR; F[o+19] = P.noseType;
-  F[o+20] = P.chamR;  F[o+21] = GEO.throatR; F[o+22] = GEO.nozExitR; F[o+23] = P.nozShape;
+  F[o+20] = GEO.chamR; F[o+21] = GEO.throatR; F[o+22] = GEO.nozExitR; F[o+23] = P.nozShape;
   F[o+24] = Math.max(3 * S.dz, 2.0);       // injector plenum depth: >= the MUSCL stencil
   F[o+25] = C.p;      F[o+26] = C.rho;     F[o+27] = 0;
 
@@ -1117,7 +1195,9 @@ function packParams(slot, dt, weight, simT){
   F[o+44] = P.RgasE / (P.gammaE - 1);          F[o+45] = P.RgasE;
   F[o+46] = E.Rg / (E.g - 1);                  F[o+47] = E.Rg;
   F[o+48] = GEO.spikeR0;   F[o+49] = GEO.spikeBuilt;
-  F[o+50] = GEO.spikeFull; F[o+51] = 0;
+  F[o+50] = GEO.spikeFull; F[o+51] = GEO.zRoot;
+  F[o+52] = GEO.plugChamR; F[o+53] = GEO.spikeSlope;
+  F[o+54] = GEO.chamR;     F[o+55] = 0;
 }
 </script>
 
@@ -1209,23 +1289,38 @@ fn extR(z : f32) -> f32 {
   return max(outerR(z), 0.0);
 }
 
+fn spikeTableR(i : i32) -> f32 {
+  let j = clamp(i, 0, 127);
+  return SPK[j / 4][j % 4];
+}
+
 /* Radius of the centrebody. Zero for a bell. For a plug nozzle it grows from the axis through
-   the contraction, reaching the spike root radius at the throat, then tapers as (1-s)^2 so the
-   surface leaves the throat steeply and finishes parallel to the axis. Truncation stops the
+   the contraction to the root radius, which sits upstream of the cowl lip because the throat
+   is inclined, and then follows the tabulated characteristic contour. Truncation stops the
    contour early and leaves a base. */
+/* Cubic Hermite from (0, p0) with zero slope to (1, p1) with slope m1, used for both walls of
+   the contraction so that each arrives at the throat inclined at nu_e. */
+fn hermite(s : f32, p0 : f32, p1 : f32, m1 : f32) -> f32 {
+  let s2 = s * s; let s3 = s2 * s;
+  return p0 + (-3.0 * p0 + 3.0 * p1 - m1) * s2 + (2.0 * p0 - 2.0 * p1 + m1) * s3;
+}
+
 fn plugR(z : f32) -> f32 {
   if (!isSpike()) { return 0.0; }
-  let zC = P.vehA.w; let zT = P.vehB.x;
-  let r0 = P.vehE.x; let built = P.vehE.y; let full = P.vehE.z;
-  if (z < zC) { return 0.0; }
-  if (z <= zT) {
-    let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
-    return r0 * 0.5 * (1.0 - cos(PI * s));
+  let zI = P.vehA.z; let zC = P.vehA.w;
+  let r0 = P.vehE.x; let built = P.vehE.y; let full = P.vehE.z; let zRoot = P.vehE.w;
+  let rci = P.vehF.x; let slope = P.vehF.y;
+  if (z < zI) { return 0.0; }
+  if (z <= zC) { return rci; }                       // annular chamber
+  if (z < zRoot) {
+    let L = max(zRoot - zC, 1e-6);
+    return hermite((z - zC) / L, rci, r0, -slope * L);
   }
-  let d = z - zT;
+  let d = z - zRoot;
   if (d > built) { return 0.0; }
-  let s = clamp(d / max(full, 1e-6), 0.0, 1.0);
-  return r0 * (1.0 - s) * (1.0 - s);
+  let f = clamp(d / max(full, 1e-6), 0.0, 1.0) * 127.0;
+  let i0 = i32(floor(f));
+  return mix(spikeTableR(i0), spikeTableR(i0 + 1), f - floor(f));
 }
 
 /* Outer radius of the internal cavity at z: chamber, raised-cosine contraction, then the
@@ -1233,13 +1328,13 @@ fn plugR(z : f32) -> f32 {
 fn innerR(z : f32) -> f32 {
   let zI = P.vehA.z; let zC = P.vehA.w; let zT = P.vehB.x; let zE = P.vehB.y;
   if (z < zI) { return -1.0; }
-  let rc = P.vehC.x; let rt = P.vehC.y; let re = P.vehC.z;
+  let rc = P.vehF.z; let rt = P.vehC.y; let re = P.vehC.z;
   if (z <= zC) { return rc; }
   if (isSpike()) {
     // contraction runs from the chamber wall to the cowl lip; past the lip there is no wall
     if (z > zT) { return -1.0; }
-    let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
-    return re + (rc - re) * 0.5 * (1.0 + cos(PI * s));
+    let L = max(zT - zC, 1e-6);
+    return hermite((z - zC) / L, rc, re, -P.vehF.y * L);
   }
   if (z > zE) { return -1.0; }
   if (z <= zT) {
@@ -1823,6 +1918,8 @@ async function compInit(){
 
 function compAlloc(){
   const dev = WG.dev;
+  dev.queue.writeBuffer(WG.buf.spike, 0,
+    GEO.spikeTable || new Float32Array(SPIKE_N));
   for (const k in (CP.buf || {})) if (CP.buf[k] && CP.buf[k].destroy) CP.buf[k].destroy();
   CP.buf = {};
   const nC = S.Nz * S.Nr;
@@ -2975,10 +3072,15 @@ function markActiveQuality(){
     <div class="hint" style="margin-top:6px">Each preset sets nozzle, chamber, propellant and
     atmosphere together, since a given nozzle is matched to one ambient pressure.</div></div>`;
   const row = d.querySelector('.presets');
+  /* A preset is a whole configuration, so selecting one must not inherit leftovers from the
+     last. Every key any preset touches goes back to its default first; keys no preset mentions
+     (viscosity, flight, measurement plane) are the user's and are left alone. */
+  const presetKeys = [...new Set(PRESETS.flatMap(pr => Object.keys(pr.p)))];
   for (const pr of PRESETS){
     const b = document.createElement('button');
     b.innerHTML = `<b>${pr.n}</b><i>${pr.d}</i>`;
     b.addEventListener('click', () => {
+      for (const k of presetKeys) P[k] = DEFAULTS[k];
       Object.assign(P, pr.p);
       syncSliders();
       buildGrid(); pendingRebuild = false;

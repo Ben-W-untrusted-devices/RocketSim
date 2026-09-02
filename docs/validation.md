@@ -90,44 +90,92 @@ Skin friction is excluded; see the note in the panel.
 
 ## Aerospike
 
-Same throat area and expansion ratio as a bell, so the 1-D reference figures are identical.
-Kerolox at 20 bar into Earth air, ε 3.45, matched (pe/pa 0.99), 8.5 cells across the annular
-gap, 607 x 112 grid, t = 2 ms.
+The plug nozzle is a method-of-characteristics contour whose annular throat area is set equal to
+pi*throat^2, so the 1-D reference figures are the same as for a bell with the same throat and
+exit radii.
 
-| nozzle | measured ṁ | vs ideal | measured thrust | vs ideal | effective c (F/ṁ) | vs ideal |
-|---|---|---|---|---|---|---|
-| bell, ε 2.04 | 581 g/s | 83 % | 1338 N | 80 % | 2303 m/s | 96 % |
-| aerospike, ε 3.45 | 602 g/s | 86 % | 1268 N | 74 % | 2106 m/s | 85 % |
+Geometry check, run against the built contour rather than against the design formulae. Walking
+the cowl surface and taking, for each point, the smallest revolved area of a segment spanning to
+the centrebody gives a minimum passage area of 615.8 mm^2 against a design throat area of
+615.8 mm^2, on the slant from the spike root to the cowl lip. There is no unintended constriction
+anywhere else in the passage, and the throat is where the construction puts it.
 
-The annular throat passes the right mass flow: at matched conditions and comparable resolution
-the plug nozzle and the bell agree to within a few percent, which confirms the area identity
-A_t = π(R_lip² − R_root²) = π·R_throat².
+### Altitude response
 
-The exhaust velocity deficit is the contour. The spike is a (1−s)² curve from an axial throat,
-not a method-of-characteristics design from an inclined throat, so the expansion is not
-isentropic and the flow does not leave exactly axial. An optimised contour would close most of
-the 11-point gap.
+Kerolox, throat 14 mm, exit 26 mm, epsilon 3.45, chamber 38 mm, into still Earth air at 101 kPa.
+Bell and aerospike on an identical 846 x 192 grid, 7.8 cells across the annular gap, t = 2.2 ms.
+Chamber pressure sets the expansion condition.
 
-Integration bound. The plume has no wall, so cumulative thrust was checked against integration
-radius at ε 2.04:
+| p_c | p_e/p_a | nozzle | measured mdot | vs ideal | thrust | vs ideal | c = F/mdot | vs ideal |
+|---|---|---|---|---|---|---|---|---|
+| 5 bar | 0.25, over-expanded | bell | 162 g/s | 93 % | 274 N | 102 % | 1690 m/s | 110 % |
+| 5 bar | 0.25, over-expanded | aerospike | 117 g/s | 67 % | 192 N | 72 % | 1639 m/s | 107 % |
+| 20 bar | 0.99, matched | bell | 640 g/s | 92 % | 1521 N | 88 % | 2375 m/s | 96 % |
+| 20 bar | 0.99, matched | aerospike | 520 g/s | 74 % | 1202 N | 70 % | 2313 m/s | 94 % |
+| 60 bar | 2.96, under-expanded | bell | 1915 g/s | 91 % | 4983 N | 89 % | 2602 m/s | 98 % |
+| 60 bar | 2.96, under-expanded | aerospike | 1523 g/s | 73 % | 3874 N | 69 % | 2544 m/s | 95 % |
+
+Effective exhaust velocity, aerospike divided by bell: 0.970 at p_e/p_a 0.25, 0.974 at 0.99,
+0.978 at 2.96. Flat to under one percent across a 12:1 range of chamber pressure.
+
+No altitude compensation is visible at this expansion ratio, and the flatness of that ratio says
+why: the bell is not losing anything for the plug nozzle to recover. Both readings above 100 %
+in the over-expanded row are the 1-D reference being wrong rather than the solver being
+optimistic. Fixed-geometry 1-D theory charges the full (p_e - p_a)*A_e debit over the whole exit
+area, which assumes the nozzle flows full; the real over-expanded bell separates, and the
+recirculating gas downstream of separation sits nearer ambient, so it pays less than the debit.
+Separation is the bell's own compensation mechanism at modest epsilon. The configurations where
+plug nozzles win are high expansion ratios, where separation moves far enough up the bell to be
+destructive; the annular gap at those ratios is a small fraction of the throat radius and is not
+resolvable on this grid.
+
+### Discharge coefficient
+
+The aerospike passes 73 % of ideal choked mass flow where the bell passes 91 %. Three
+measurements localise it.
+
+Station scan, propellant mass flux integrated across successive axial planes from just past the
+throat to 90 mm downstream of the exit, at 1128 x 256:
+
+| station | throat+1 | +5 | +15 | +30 | +45 | exit | +40 | +90 |
+|---|---|---|---|---|---|---|---|---|
+| mdot | 512 g/s | 513 | 506 | 506 | 508 | 517 | 492 | 499 |
+
+Flat at 73 % from the throat outward, with nothing entering the radial sponge, so no mass is
+lost in the plume. The throat itself passes 73 %.
+
+Resolution, same configuration:
+
+| radial cells | cells across gap | grid | mdot vs ideal | thrust vs ideal | c vs ideal |
+|---|---|---|---|---|---|
+| 128 | 5.2 | 564 x 128 | 66 % | 58 % | 89 % |
+| 192 | 7.8 | 846 x 192 | 73 % | 73 % | 100 % |
+| 256 | 10.3 | 1128 x 256 | 73 % | 71 % | 97 % |
+
+Exhaust velocity converges. Mass flow does not; it plateaus at 73 %.
+
+Viscosity, at 192 radial cells: 73 % viscous against 72 % with molecular viscosity and the
+Smagorinsky constant both set to zero. The deficit is not boundary-layer displacement.
+
+What remains is the wall representation. Solid cells are masked, not cut, so a wall is a
+staircase. The throat here is inclined 48 degrees to an axis-aligned grid, which is the worst
+case for a staircase, and the blockage is roughly one cell on each of the two walls bounding a
+gap 10 cells wide. A bell throat, whose wall is nearly parallel to the axis at the same station,
+does not pay it. The bias is numerical and it cancels out of F/mdot, which is why exhaust
+velocity converges while mass flow does not. Rank plug-nozzle designs on effective exhaust
+velocity.
+
+### Integration bound
+
+The plume has no wall, so the exit-plane integral is bounded by the exhaust tracer. Cumulative
+thrust against integration radius, at epsilon 2.04:
 
 | radius | 20 mm (lip) | 30 mm | 35 mm | 45 mm | 70 mm (domain) |
 |---|---|---|---|---|---|
 | cumulative thrust | 431 N | 921 N | 1195 N | 1213 N | 1176 N |
 
-Flat beyond about 35 mm, varying 1.6 % out to the domain edge, so the tracer-bounded integral
-is converged with respect to where it stops.
-
-Altitude response, ε 2.04, same geometry, bell against aerospike:
-
-| p_c | pe/pa | bell thrust vs ideal | aerospike thrust vs ideal |
-|---|---|---|---|
-| 4 bar | 0.44 (over-expanded) | 81 % | 84 % |
-| 20 bar | 2.19 (under-expanded) | 80 % | 71 % |
-
-The plug nozzle holds up marginally better when over-expanded and reads lower when
-under-expanded. At this resolution the difference is within the range set by the annular throat
-being resolved by 9 cells, so it is not a demonstration of altitude compensation.
+Flat beyond about 35 mm, varying 1.6 % out to the domain edge, so the integral is converged with
+respect to where it stops.
 
 ## Two-species contact discontinuity
 
