@@ -136,7 +136,9 @@ altitude compensation at this expansion ratio. See
 
 ### Presets
 
-Nine, each setting nozzle, chamber, propellant and atmosphere together.
+Fourteen, each setting nozzle, chamber, propellant and atmosphere together. The last five are
+flown hardware, set up from published chamber conditions and area ratio, with the throat area
+derived from the published mass flow rather than fitted.
 
 | preset | configuration |
 |---|---|
@@ -149,6 +151,11 @@ Nine, each setting nozzle, chamber, propellant and atmosphere together.
 | Venus surface | 250 bar against 92 bar back pressure, ε 1.1, Isp 159 s |
 | Aerospike | plug nozzle, ε 3.45, matched at sea level |
 | Titan flight | methalox at Mach 1.5 through cold dense nitrogen, with entrainment |
+| V-2 (A-4) | 1942, LOX/ethanol at 15 bar, ε 3.3, flown vertically as a sounding rocket |
+| F-1 | Saturn V first stage, LOX/RP-1 at 70 bar, ε 16 |
+| RS-25 | Shuttle main engine, hydrolox at 206 bar, ε 69 |
+| XRS-2200 | X-33 aerospike, hydrolox at 58 bar, ε 58. Annular here; the engine was linear |
+| Traveler IV | USC RPL 2019, the first student rocket past the Kármán line |
 
 ---
 

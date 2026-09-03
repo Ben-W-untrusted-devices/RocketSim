@@ -3,6 +3,14 @@
 Measurements taken with the shipped defaults unless stated otherwise. All timings are on an
 Apple M1.
 
+Most of what follows is re-runnable rather than transcribed. The **Validation** panel in the
+app runs 20 checks: published performance for the five hardware presets, the plug-nozzle
+contour against its design throat area across the expansion range, two one-dimensional
+identities, and six steady-state solver checks. Fast checks return at once; the full set takes
+about three minutes. `await validate('fast')` and `await validate('all')` do the same from the
+console and return the rows. Bands are one-sided where the quantity is an ideal figure real
+hardware cannot reach.
+
 ## Reference configuration
 
 Kerolox (γ 1.24, M 22.2 g/mol, T_c 3570 K) at 20 bar, through a 25 mm chamber, an 8 mm throat
@@ -200,6 +208,58 @@ mechanism at modest epsilon, and there is little for a plug nozzle to recover. P
 at high expansion ratios, where separation moves far enough up the bell to be destructive; the
 annular gap at those ratios is a small fraction of the throat radius and is not resolvable on
 this grid.
+
+### When a plug nozzle is worth it
+
+A plug nozzle only earns anything where a bell would be forced to separate, so the question is
+when a bell's usable expansion ratio is small. Sweeping chamber pressure, taking the Summerfield
+criterion p_e/p_a = 0.35 as the bell's limit at sea level, and comparing against a plug carrying
+a vacuum-sized ratio of 150:
+
+| p_c | largest epsilon a bell can carry | mean Isp gain from the plug |
+|---|---|---|
+| 20 bar | 7 | +40 s |
+| 50 bar | 15 | +29 s |
+| 100 bar | 25 | +22 s |
+| 200 bar | 43 | +16 s |
+| 300 bar | 59 | +13 s |
+
+High chamber pressure does the plug nozzle's job for it. At 300 bar a bell already reaches
+within 14 s of the vacuum optimum, which does not pay for a centrebody that has to be cooled and
+a base that has to be filled. At 20 bar the gap is 40 s and the argument changes. This is a
+large part of why aerospikes have not flown: staged combustion arrived first and took most of
+the prize.
+
+The second case has nothing to do with altitude. Throttling drops chamber pressure, which
+over-expands a fixed bell exactly as climbing under-expands it. An epsilon 25 bell at sea level:
+
+| throttle | 100 % | 60 % | 40 % | 30 % | 20 % |
+|---|---|---|---|---|---|
+| p_e/p_a | 0.35 | 0.21 | 0.14 | 0.10 | 0.07 |
+| 1-D Isp | 377 s | 337 s | 286 s | 235 s | 134 s |
+
+Every one of those is separated, with the side loads that go with it. A plug holds its exit
+condition because the plume boundary is ambient pressure rather than a wall. Landing burns and
+boostback are this regime.
+
+So the configurations worth simulating at high expansion ratio are low to moderate chamber
+pressure engines that fly from sea level to vacuum on one nozzle, and anything that throttles
+deeply. Upper stages are not among them: in vacuum there is nothing to compensate and a bell is
+lighter. Neither is Mars ascent, where ambient is already negligible, nor Venus, where the
+optimum ratio is 1.1.
+
+Four things at high expansion ratio are outside what one-dimensional theory can supply, which is
+what makes the simulation worth its cost there. The plume's outer boundary is set by ambient
+pressure and is the compensating mechanism itself. Real spikes are truncated to 20 to 40 % of
+the contour, and at high ratios the spike is slender enough that the base is a large fraction of
+the exit area, with a recirculation pressure that adds to or subtracts from thrust. Below the
+design altitude the flow over the spike carries recompression shocks, and the surface pressure
+distribution under them is the thrust. And a descent burn puts the plume against a supersonic
+freestream with ambient rising through the burn.
+
+These are ideal one-dimensional figures. Summerfield is an approximate criterion, and the plug
+is credited at sea level with the performance of a matched nozzle, which is optimistic by
+perhaps 5 to 10 %.
 
 ### Integration bound
 

@@ -69,6 +69,12 @@
   .ctl input[type=number]::-webkit-outer-spin-button{appearance:none; margin:0}
   .ctl input[type=number]:focus{outline:none; border-color:var(--accent)}
   .ctl .hint{font-size:10.5px; color:var(--dim); margin-top:1px}
+  .vtab{width:100%; border-collapse:collapse; margin-top:6px; font-size:10px}
+  .vtab td{padding:2px 4px; vertical-align:top; border-top:1px solid var(--line)}
+  .vtab td:first-child{width:30px; font:9px var(--mono)}
+  .vtab td:last-child{text-align:right; white-space:nowrap; color:var(--dim)}
+  .vtab td:nth-child(3){text-align:right; white-space:nowrap; font:10px var(--mono)}
+  .vpass{color:var(--good)}  .vfail{color:var(--bad)}
   .rebuild .lab span:first-child::after{content:" ↻"; color:var(--dim); font-size:10px}
   select,button{font:inherit; background:var(--panel2); color:var(--fg);
                 border:1px solid var(--line); border-radius:6px; padding:5px 8px}
@@ -161,8 +167,8 @@ const CONTROLS = [
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
      hint:'Chamber conditions ramp from ambient to full over this interval, smoothstep in ' +
           'time. Shorter ramps produce a stronger starting shock.' },
-   { k:'chamR',   t:'Chamber radius',        min:5,   max:500, step:0.5, v:25,   unit:'mm', rebuild:true },
-   { k:'chamLen', t:'Chamber length',        min:10,  max:1500,step:1,   v:50,   unit:'mm', rebuild:true,
+   { k:'chamR',   t:'Chamber radius',        min:5,   max:1500,step:0.5, v:25,   unit:'mm', rebuild:true },
+   { k:'chamLen', t:'Chamber length',        min:10,  max:4000,step:1,   v:50,   unit:'mm', rebuild:true,
      hint:'Gas dynamics only. No injector elements, no combustion, no characteristic length; ' +
           'the head end is held at stagnation conditions.' },
  ]},
@@ -181,18 +187,18 @@ const CONTROLS = [
           'weight raises performance: hydrolox is 693 against kerolox at 375.' },
  ]},
  { group:'Nozzle', open:true, items:[
-   { k:'throatR',  t:'Throat radius',        min:1,  max:400, step:0.25, v:8,    unit:'mm', rebuild:true,
+   { k:'throatR',  t:'Throat radius',        min:1,  max:800, step:0.25, v:8,    unit:'mm', rebuild:true,
      hint:'Once choked, mass flow is proportional to throat area. The grid needs at least ' +
           'about 6 cells across the throat radius; the panel reports the current figure.' },
-   { k:'nozExitR', t:'Exit radius',          min:1,  max:900, step:0.25, v:14.75,unit:'mm', rebuild:true,
+   { k:'nozExitR', t:'Exit radius',          min:1,  max:3000,step:0.25, v:14.75,unit:'mm', rebuild:true,
      hint:'With the throat radius this fixes the expansion ratio, and so the ambient pressure ' +
           'the nozzle is matched to. For an aerospike it is the cowl lip radius, and the spike ' +
           'root radius follows as √(exit² − throat²), which keeps the annular throat area equal ' +
           'to π·throat².' },
-   { k:'convLen',  t:'Converging length',    min:2,  max:900, step:1,    v:20,   unit:'mm', rebuild:true,
+   { k:'convLen',  t:'Converging length',    min:2,  max:2000,step:1,    v:20,   unit:'mm', rebuild:true,
      hint:'Raised-cosine contour, meeting both the chamber wall and the throat at zero slope. ' +
           'The subsonic flow here is insensitive to the shape.' },
-   { k:'divLen',   t:'Diverging length',     min:2,  max:2000,step:1,    v:25,   unit:'mm', rebuild:true,
+   { k:'divLen',   t:'Diverging length',     min:2,  max:5000,step:1,    v:25,   unit:'mm', rebuild:true,
      hint:'Sets the divergence half-angle, and with it the cosine loss and the separation ' +
           'margin. 12 to 18° is the usual conical range. Conical and bell only: an aerospike ' +
           'contour has one length that satisfies the characteristics, so its spike length ' +
@@ -216,11 +222,11 @@ const CONTROLS = [
      hint:'Affects the flow only when there is a freestream. Flat gives a detached bow shock ' +
           'and a subsonic pocket; pointy gives an attached oblique shock above its Mach angle; ' +
           'rounded is intermediate.' },
-   { k:'noseLen',  t:'Nose cone length',     min:5,  max:3000,step:1,    v:55,   unit:'mm', rebuild:true,
+   { k:'noseLen',  t:'Nose cone length',     min:5,  max:9000,step:1,    v:55,   unit:'mm', rebuild:true,
      hint:'Ignored when the nose is flat.' },
-   { k:'foreLen',  t:'Forebody length',      min:0,  max:4000,step:1,    v:40,   unit:'mm', rebuild:true,
+   { k:'foreLen',  t:'Forebody length',      min:0,  max:12000,step:1,   v:40,   unit:'mm', rebuild:true,
      hint:'Solid body between the nose base and the injector face.' },
-   { k:'wallT',    t:'Wall thickness',       min:0.5,max:100, step:0.5,  v:3,    unit:'mm', rebuild:true,
+   { k:'wallT',    t:'Wall thickness',       min:0.5,max:300, step:0.5,  v:3,    unit:'mm', rebuild:true,
      hint:'Body radius is max(chamber, nozzle exit) + this, so the base is always an annulus.' },
  ]},
  { group:'Atmosphere', open:true, items:[
@@ -291,7 +297,7 @@ const CONTROLS = [
    { k:'dyeDiss',  t:'Exhaust tracer fade',  min:0, max:0.05, step:0.001, v:0, unit:'/ms' },
  ]},
  { group:'Domain & solver', items:[
-   { k:'downrange', t:'Plume domain',        min:50, max:12000,step:10,  v:300,  unit:'mm', rebuild:true,
+   { k:'downrange', t:'Plume domain',        min:50, max:40000,step:10,  v:300,  unit:'mm', rebuild:true,
      hint:'Distance from the nozzle exit plane to the outflow boundary.' },
    { k:'rDomain',   t:'Radial domain',       min:1.5,max:6,   step:0.25, v:2.5,  rebuild:true,
      unit:'× body radius',
@@ -666,7 +672,55 @@ const PRESETS = [
  { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
    p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
        pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
+
+ /* ---- flown hardware ----------------------------------------------------------------
+    Chamber conditions and area ratio from published figures; throat area from the published
+    mass flow and the c* the propellant gives, so the geometry is derived rather than fitted.
+    Expected values are in HARDWARE below, which the validation suite checks against. */
+ { n:'V-2 (A-4)', d:'1942, LOX/ethanol, 15 bar, ε 3.3, vertical sounding flight',
+   p:{ gammaE:1.22, RgasE:354, Tc:2973, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0, gSurf:9.81,
+       pcBar:15, throatR:203, nozExitR:370, chamR:250, chamLen:600, convLen:400, divLen:620,
+       nozShape:1, noseType:2, noseLen:1800, foreLen:2500, wallT:20,
+       res:112, rDomain:2.5, downrange:3000,
+       accelerate:1, flightMode:1, dryMassLog:LOG10(4040), propMassLog:LOG10(8000), ffLog:3 } },
+ { n:'F-1', d:'Saturn V first stage, LOX/RP-1, 70 bar, ε 16',
+   p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0,
+       pcBar:70, throatR:455, nozExitR:1820, chamR:560, chamLen:1100, convLen:700, divLen:3000,
+       nozShape:1, noseType:2, noseLen:3000, foreLen:4000, wallT:40,
+       res:112, rDomain:2.0, downrange:8000 } },
+ { n:'RS-25', d:'Shuttle main engine, hydrolox, 206 bar, ε 69',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0,
+       pcBar:206, throatR:137, nozExitR:1138, chamR:170, chamLen:450, convLen:260, divLen:2900,
+       nozShape:1, noseType:2, noseLen:1200, foreLen:1500, wallT:15,
+       res:112, rDomain:2.0, downrange:6000 } },
+ { n:'XRS-2200', d:'X-33 aerospike, hydrolox, 58 bar, ε 58. Annular here; the engine was linear',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0,
+       pcBar:58, throatR:188, nozExitR:1432, chamR:500, chamLen:600, convLen:900,
+       nozShape:2, spikeTrunc:100, noseType:2, noseLen:1500, foreLen:2000, wallT:25,
+       res:256, rDomain:1.5, downrange:6000 } },
+ { n:'Traveler IV', d:'USC RPL 2019, first student rocket past the Karman line',
+   p:{ gammaE:1.18, RgasE:308, Tc:3200, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0, gSurf:9.81,
+       pcBar:20, throatR:39, nozExitR:95, chamR:90, chamLen:400, convLen:60, divLen:120,
+       nozShape:1, noseType:1, noseLen:600, foreLen:1400, wallT:6,
+       res:112, rDomain:2.5, downrange:1200,
+       accelerate:1, flightMode:1, dryMassLog:LOG10(67), propMassLog:LOG10(83), ffLog:3.5 } },
 ];
+
+/* Published performance for the hardware presets, and the tolerance each is expected to meet.
+   Ideal one-dimensional figures run high by the combustion and nozzle efficiency a real engine
+   loses, which is a few percent, so the bands are one-sided where that applies. */
+const HARDWARE = {
+  'V-2 (A-4)': { ispSL:[203, -2, 15], ispVac:[239, -2, 18], mdot:[123, -6, 6] },
+  'F-1':       { ispSL:[263, -2, 18], ispVac:[304, -2, 20], mdot:[2577, -8, 8] },
+  'RS-25':     { ispSL:[366, -2, 16], ispVac:[452, -2, 12], mdot:[515, -8, 8] },
+  'XRS-2200':  { ispVac:[439, -4, 22] },
+  'Traveler IV': { }
+};
 
 /* ========================== simulation state ========================== */
 const S = {
@@ -3154,6 +3208,38 @@ for (const g of CONTROLS){
   host.appendChild(d);
 }
 
+/* ---- validation panel ---- */
+{
+  const d = document.createElement('details');
+  d.innerHTML = `<summary>Validation</summary><div class="body">
+    <div class="hint">Re-runs the checks behind
+    <a href="docs/validation.md" target="_blank" rel="noopener">docs/validation.md</a>:
+    published performance for the five hardware presets, the plug-nozzle contour, and solver
+    behaviour at steady state. Fast checks are one-dimensional and return at once; the full set
+    runs the solver and takes a few minutes. The configuration is restored afterwards.</div>
+    <div class="btnrow"><button id="valFast">Run fast checks</button>
+      <button id="valAll">Run all</button></div>
+    <div id="valOut" class="hint"></div></div>`;
+  host.appendChild(d);
+  const out = d.querySelector('#valOut');
+  const go = async tier => {
+    d.open = true;
+    out.innerHTML = 'Running' + (tier === 'fast' ? ' fast checks' : ', this takes a few minutes') + '...';
+    for (const b of d.querySelectorAll('button')) b.disabled = true;
+    const r = await validate(tier);
+    for (const b of d.querySelectorAll('button')) b.disabled = false;
+    out.innerHTML =
+      `<b class="${r.pass ? 'vpass' : 'vfail'}">${r.failed} of ${r.ran} failed</b>` +
+      `<table class="vtab">` + r.rows.map(x =>
+        `<tr class="${x.pass ? 'vpass' : 'vfail'}"><td>${x.pass ? 'pass' : 'FAIL'}</td>` +
+        `<td>${x.n}</td><td>${Number.isFinite(x.got) ? fmt(x.got, 2) : (x.err || 'no result')}</td>` +
+        `<td>${Number.isFinite(x.want) ? fmt(x.want, 2) + ' ' + (x.unit || '') : ''}</td></tr>`
+      ).join('') + `</table>`;
+  };
+  d.querySelector('#valFast').addEventListener('click', () => go('fast'));
+  d.querySelector('#valAll').addEventListener('click', () => go('all'));
+}
+
 /* ---- export button, appended to the video section ---- */
 {
   const vid = [...host.querySelectorAll('details')]
@@ -3606,6 +3692,178 @@ function flagDivergence(v){
     `pressure ratio. Lower the <b>CFL number</b>, lengthen the <b>ignition rise time</b>, ` +
     `or raise the radial resolution to resolve the throat better, then ignite again.`;
 }
+
+/* ============================ validation suite ============================
+   Checks that can be re-run after a change, rather than measurements taken once and written
+   into a document. Fast checks are one-dimensional or geometric and return immediately; slow
+   ones run the solver to a steady state and take a couple of minutes altogether.
+
+   Bands are asymmetric where the quantity is an ideal figure that real hardware cannot reach:
+   an engine delivers the product of its combustion and nozzle efficiencies, a few percent
+   below ideal, so the model is expected to read high and by roughly that much. */
+
+function vSetPreset(name, over){
+  const pr = PRESETS.find(x => x.n === name);
+  if (!pr) throw new Error('no preset ' + name);
+  /* Every parameter goes back to its default, not just the ones presets mention, so a check
+     cannot inherit a setting from whichever check ran before it. */
+  Object.assign(P, DEFAULTS);
+  Object.assign(P, pr.p, over || {});
+  syncSliders(); buildGrid(); pendingRebuild = false;
+  return derived();
+}
+/* Step to a flow time, yielding between batches so the page stays alive. Returns false if the
+   run diverged or ran out of wall-clock budget. */
+async function vRunTo(tEnd, budgetMs){
+  const t0 = performance.now();
+  S.running = false;
+  while (S.t < tEnd && !S.diverged){
+    if (performance.now() - t0 > (budgetMs || 120000)) return false;
+    compSteps(64);
+    await WG.dev.queue.onSubmittedWorkDone();
+    await new Promise(r => setTimeout(r, 0));
+  }
+  return !S.diverged;
+}
+/* Largest revolved area of a surface spanning the passage, minimised over all such surfaces.
+   For a plug nozzle this has to come out at the design throat area or the contour is wrong. */
+function vMinPassage(){
+  const G = GEO, At = Math.PI * G.throatR * G.throatR;
+  const cowl = z => {
+    if (z <= G.zConv0) return G.chamR;
+    if (z > G.zThroat) return -1;
+    if (z >= G.zArc){ const sn = (z - G.zArc) / (G.turnR + G.turnGap);
+      return G.arcOr + (G.turnR + G.turnGap) * Math.sqrt(Math.max(1 - sn*sn, 0)); }
+    const t = (z - G.zConv0) / (G.zArc - G.zConv0);
+    return G.chamR + (G.arcOr + G.turnR + G.turnGap - G.chamR) * (t*t*(3-2*t));
+  };
+  const spk = z => {
+    if (z < G.zInj) return 0;
+    if (z <= G.zArc) return G.plugChamR;
+    if (z < G.zRoot){ const sn = (z - G.zArc) / G.turnR;
+      return G.arcOr + G.turnR * Math.sqrt(Math.max(1 - sn*sn, 0)); }
+    const d = z - G.zRoot;
+    if (d > G.spikeBuilt) return 0;
+    const f = Math.min(Math.max(d / G.spikeFull, 0), 1) * 127, i0 = Math.floor(f), t = G.spikeTable;
+    return t[i0] + (t[Math.min(i0+1,127)] - t[i0]) * (f - i0);
+  };
+  let best = 1e9;
+  for (let i = 0; i <= 400; i++){
+    const zc = G.zConv0 + (G.zThroat - G.zConv0) * i / 400, rc = cowl(zc);
+    for (let j = 0; j <= 400; j++){
+      const zs = G.zConv0 + (G.zRoot + G.spikeFull - G.zConv0) * j / 400, rs = spk(zs);
+      if (rs >= rc) continue;
+      best = Math.min(best, Math.PI * (rc + rs) * Math.hypot(zc - zs, rc - rs));
+    }
+  }
+  return best / At;
+}
+
+const CHECKS = [];
+const vAdd = (n, tier, fn) => CHECKS.push({ n, tier, fn });
+
+/* ---- flown hardware, one-dimensional ---- */
+for (const name of Object.keys(HARDWARE)){
+  const want = HARDWARE[name];
+  if (want.ispSL) vAdd(`${name}: Isp at sea level`, 'fast', async () => {
+    const d = vSetPreset(name);
+    return { got:d.isp, want:want.ispSL[0], lo:want.ispSL[1], hi:want.ispSL[2], unit:'s' };
+  });
+  if (want.ispVac) vAdd(`${name}: Isp in vacuum`, 'fast', async () => {
+    const d = vSetPreset(name, { pAmbLog:-2 });
+    return { got:d.isp, want:want.ispVac[0], lo:want.ispVac[1], hi:want.ispVac[2], unit:'s' };
+  });
+  if (want.mdot) vAdd(`${name}: mass flow`, 'fast', async () => {
+    const d = vSetPreset(name);
+    return { got:d.mdot, want:want.mdot[0], lo:want.mdot[1], hi:want.mdot[2], unit:'kg/s' };
+  });
+}
+
+/* ---- geometry ---- */
+vAdd('Plug contour: throat area matches the design, eps 1.1 to 8', 'fast', async () => {
+  let worst = 0;
+  for (const re of [14.4, 16, 19.8, 26, 40]){
+    vSetPreset('Aerospike', { nozExitR:re });
+    worst = Math.max(worst, Math.abs(vMinPassage() - 1));
+  }
+  return { got:1 + worst, want:1, lo:-0.02, hi:0.02, unit:'x design' };
+});
+vAdd('Bell contour: throat radius is the minimum', 'fast', async () => {
+  const d = vSetPreset('Sea-level booster');
+  return { got:d.rt, want:Math.min(P.throatR, P.chamR - 0.5), lo:-0.01, hi:0.01, unit:'mm' };
+});
+
+/* ---- one-dimensional identities ---- */
+vAdd('Area-Mach inverts to itself over Mach 1 to 6', 'fast', async () => {
+  let worst = 0;
+  for (const g of [1.18, 1.24, 1.40]) for (let M = 1.05; M <= 6; M += 0.05){
+    const back = machFromArea(areaRatio(M, g), g);
+    worst = Math.max(worst, Math.abs(back - M) / M);
+  }
+  return { got:worst * 100, want:0, lo:0, hi:0.5, unit:'% worst' };
+});
+vAdd('Choked mass flow equals rho* a* A*', 'fast', async () => {
+  const d = vSetPreset('Sea-level booster');
+  const g = d.g, R = d.Rg, T0 = d.Tc;
+  const rho0 = d.pc / (R * T0);
+  const rhoS = rho0 * Math.pow(2 / (g + 1), 1 / (g - 1));
+  const aS = Math.sqrt(g * R * T0 * 2 / (g + 1));
+  const direct = rhoS * aS * d.At * 1.0e-6;        // At is in mm^2
+  return { got:d.mdot / direct, want:1, lo:-0.005, hi:0.005, unit:'x direct' };
+});
+
+/* ---- solver, steady state ---- */
+vAdd('Reference bell: mass flow against ideal', 'slow', async () => {
+  vSetPreset('Sea-level booster');
+  if (!await vRunTo(2.0, 90000)) return { got:NaN, want:91, lo:-6, hi:6, unit:'%' };
+  const d = derived(), m = S.meas;
+  return { got:100 * m.mdot / d.mdot, want:91, lo:-6, hi:6, unit:'%' };
+});
+vAdd('Reference bell: on-axis exhaust velocity', 'slow', async () => {
+  const d = derived(), m = S.meas;      // reuses the state the previous check left
+  return { got:m.axis, want:2630, lo:-120, hi:120, unit:'m/s' };
+});
+vAdd('Flat nose at Mach 2: drag coefficient', 'slow', async () => {
+  vSetPreset('Supersonic flight', { noseType:0 });
+  if (!await vRunTo(2.0, 90000)) return { got:NaN, want:1.5, lo:-0.2, hi:0.2, unit:'C_D' };
+  const d = derived(), m = S.meas;
+  const A = Math.PI * GEO.bodyR * GEO.bodyR * 1e-6;
+  return { got:m.drag / (0.5 * d.rhoAmb * d.vInf * d.vInf * A), want:1.5, lo:-0.2, hi:0.2, unit:'C_D' };
+});
+vAdd('Uniform ambient integrates to zero drag', 'slow', async () => {
+  vSetPreset('Sea-level booster', { pcBar:1.0001, vAmb:0, riseMs:20 });
+  if (!await vRunTo(0.3, 60000)) return { got:NaN, want:0, lo:-2, hi:2, unit:'N' };
+  return { got:S.meas.drag, want:0, lo:-2, hi:2, unit:'N' };
+});
+vAdd('Aerospike: mass flow against ideal', 'slow', async () => {
+  vSetPreset('Aerospike');
+  if (!await vRunTo(2.2, 180000)) return { got:NaN, want:76, lo:-10, hi:10, unit:'%' };
+  const d = derived(), m = S.meas;
+  return { got:100 * m.mdot / d.mdot, want:76, lo:-10, hi:10, unit:'%' };
+});
+vAdd('Aerospike: exhaust velocity against ideal', 'slow', async () => {
+  const d = derived(), m = S.meas;
+  return { got:100 * (m.thrust / m.mdot) / (d.thrust / d.mdot), want:93, lo:-8, hi:8, unit:'%' };
+});
+
+async function validate(tier){
+  const saved = JSON.stringify(P);
+  const rows = [];
+  for (const c of CHECKS){
+    if (tier === 'fast' && c.tier !== 'fast') continue;
+    let r;
+    try { r = await c.fn(); }
+    catch (e){ r = { got:NaN, want:NaN, lo:0, hi:0, unit:'', err:String(e) }; }
+    const pass = Number.isFinite(r.got) &&
+                 (r.got - r.want) >= r.lo - 1e-9 && (r.got - r.want) <= r.hi + 1e-9;
+    rows.push(Object.assign({ n:c.n, tier:c.tier, pass }, r));
+  }
+  Object.assign(P, JSON.parse(saved));
+  syncSliders(); buildGrid(); pendingRebuild = false; updateMetrics();
+  const failed = rows.filter(r => !r.pass);
+  return { pass:failed.length === 0, ran:rows.length, failed:failed.length, rows };
+}
+window.validate = validate;
 
 (async function boot(){
   await wgpuInit();
