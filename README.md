@@ -48,6 +48,12 @@ treat it as ordinary fluid, so mass flow through the nozzle is an output rather 
 
 ### Parameters
 
+Controls spanning a few hundred steps or more, and every logarithmic one, are typed fields
+rather than sliders: a range input can only address as many values as it has pixels, and a
+throat radius running from 1 to 400 mm cannot be set to a particular number with a mouse.
+Logarithmic parameters are typed in their own units, so ambient pressure takes 0.64 for Mars
+rather than an exponent. Narrower controls stay as sliders, since dragging them is useful.
+
 | group | contents |
 |---|---|
 | Chamber & injector | chamber pressure, ignition rise time, chamber radius and length |

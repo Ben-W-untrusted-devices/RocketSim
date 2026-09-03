@@ -60,6 +60,14 @@
   .ctl .lab span:first-child{color:var(--fg)}
   .ctl .lab span:last-child{font:11px var(--mono); color:var(--accent)}
   .ctl input[type=range]{width:100%; margin:3px 0 0; accent-color:var(--accent)}
+  /* A plain typed field: no spinner, since the step these once had was a slider convenience
+     and arrows at that granularity are no use over a range this wide. */
+  .ctl input[type=number]{width:100%; margin:3px 0 0; box-sizing:border-box; padding:3px 5px;
+    font:12px var(--mono); color:var(--fg); background:var(--panel2); border:1px solid var(--line);
+    border-radius:3px; appearance:textfield; -moz-appearance:textfield}
+  .ctl input[type=number]::-webkit-inner-spin-button,
+  .ctl input[type=number]::-webkit-outer-spin-button{appearance:none; margin:0}
+  .ctl input[type=number]:focus{outline:none; border-color:var(--accent)}
   .ctl .hint{font-size:10.5px; color:var(--dim); margin-top:1px}
   .rebuild .lab span:first-child::after{content:" ↻"; color:var(--dim); font-size:10px}
   select,button{font:inherit; background:var(--panel2); color:var(--fg);
@@ -221,7 +229,7 @@ const CONTROLS = [
           'exhaust is a separate gas, so the plume boundary carries a jump in molecular ' +
           'weight as well as in temperature.' },
    { k:'pAmbLog',  t:'Ambient pressure',     min:-2, max:4,   step:0.002, v:2.006, log:true, unit:'kPa',
-     hint:'Logarithmic, 10 Pa to 10 MPa. Mars surface 0.64 kPa, Earth 101, Titan 147, Venus ' +
+     hint:'10 Pa to 10 MPa, typed in kPa. Mars surface 0.64 kPa, Earth 101, Titan 147, Venus ' +
           'surface 9200.' },
    { k:'tAmb',     t:'Ambient temperature',  min:60, max:800, step:1,    v:288,  unit:'K',
      hint:'With the gas constant, fixes ambient density and sound speed.' },
@@ -259,7 +267,7 @@ const CONTROLS = [
      hint:'Angle from vertical applied at the pitch-over. Thereafter dγ/dt = −g·cos γ / v, so ' +
           'the turn rate rises as the vehicle slows.' },
    { k:'dryMassLog',  t:'Dry mass',    min:-1, max:5, step:0.01, v:0.3, log:true, unit:'kg',
-     hint:'Logarithmic, 0.1 kg to 100 tonnes, so a real vehicle fits. The trajectory is a ' +
+     hint:'0.1 kg to 100 tonnes, so a real vehicle fits. The trajectory is a ' +
           'point mass, and only the ratio of thrust to weight and the frontal area reach it, ' +
           'so mass need not match the drawn geometry.' },
    { k:'propMassLog', t:'Propellant mass', min:-1, max:5, step:0.01, v:0, log:true, unit:'kg',
@@ -2957,6 +2965,34 @@ const host = document.getElementById('controls');
 const sliders = {};
 let pendingRebuild = false;
 
+/* Which controls are past the point where a mouse is useful: a few hundred steps is about
+   what a slider's width can address, and a logarithmic control covering three decades or more
+   puts wildly different magnitudes within a few pixels of each other. */
+function isWide(it){
+  if (it.kind === 'check' || it.choices) return false;
+  if (it.log) return (it.max - it.min) >= 3;
+  return (it.max - it.min) / (it.step || 1) > 150;
+}
+/* Stored value <-> the number shown in the field. Logarithmic parameters are held as an
+   exponent but typed in their own units. */
+const shown  = (it, v) => it.log ? Math.pow(10, v) : v;
+const stored = (it, x) => it.log ? Math.log10(Math.max(x, 1e-300)) : x;
+function numStr(x){
+  if (!Number.isFinite(x)) return '0';
+  const a = Math.abs(x);
+  if (a >= 1000) return String(Math.round(x));
+  if (a >= 10)   return String(Math.round(x * 100) / 100);
+  if (a >= 0.1)  return String(Math.round(x * 1000) / 1000);
+  return String(Number(x.toPrecision(3)));
+}
+/* The value attribute has to be written as well as the property, or a cloned copy of the
+   panel, which is how the screenshots are taken, shows the default instead. */
+function setNum(it, inp, v){
+  const t = numStr(shown(it, v));
+  inp.value = t;
+  inp.setAttribute('value', t);
+}
+
 function fmtVal(it, v){
   if (it.kind === 'check') return v ? 'on' : 'off';
   if (it.choices) return it.choices[Math.round(v)] || String(v);
@@ -3053,6 +3089,46 @@ function addControl(body, it){
     });
     return;
   }
+  if (isWide(it)){
+    /* A range input can only address as many values as it has pixels. Once a control spans
+       thousands of steps or several decades, the mouse cannot reach a particular number at all,
+       so these take a typed value instead. Logarithmic parameters are typed in their own units,
+       not as an exponent. */
+    const lo = it.log ? Math.pow(10, it.min) : it.min;
+    const hi = it.log ? Math.pow(10, it.max) : it.max;
+    wrap.innerHTML =
+      `<div class="lab"><span>${it.t}</span>` +
+      `<span id="v_${it.k}">${it.unit || ''}</span></div>` +
+      `<input type="number" id="s_${it.k}" min="${numStr(lo)}" max="${numStr(hi)}"` +
+      ` step="any" value="${numStr(shown(it, it.v))}">` +
+      (it.hint ? `<div class="hint">${it.hint}</div>` : '');
+    body.appendChild(wrap);
+    const inp = wrap.querySelector('input');
+    sliders[it.k] = { inp, out:null, it, num:true };
+    const commit = () => {
+      const raw = parseFloat(inp.value);
+      if (!Number.isFinite(raw)) { setNum(it, inp, P[it.k]); return; }
+      P[it.k] = stored(it, Math.min(Math.max(raw, lo), hi));
+      setNum(it, inp, P[it.k]);
+      if (it.rebuild) pendingRebuild = true;
+      scheduleURLSync(true);
+      updateMetrics();
+    };
+    // typing updates live; leaving the field clamps and normalises what was typed
+    inp.addEventListener('input', () => {
+      const raw = parseFloat(inp.value);
+      if (!Number.isFinite(raw) || raw < lo || raw > hi) return;
+      P[it.k] = stored(it, raw);
+      inp.setAttribute('value', inp.value);
+      if (it.rebuild) pendingRebuild = true;
+      scheduleURLSync();
+      updateMetrics();
+    });
+    inp.addEventListener('change', commit);
+    inp.addEventListener('blur', commit);
+    return;
+  }
+
   wrap.innerHTML =
     `<div class="lab"><span>${it.t}</span><span id="v_${it.k}">${fmtVal(it, it.v)}</span></div>` +
     `<input type="range" id="s_${it.k}" min="${it.min}" max="${it.max}" step="${it.step}" value="${it.v}">` +
@@ -3239,6 +3315,14 @@ function syncSliders(){
       s.inp.checked = !!P[k];
       s.inp.toggleAttribute('checked', s.inp.checked);   // so DOM clones keep the state
       P[k] = s.inp.checked ? 1 : 0;
+      continue;
+    }
+    if (s.num){
+      const it = s.it;
+      const lo = it.log ? Math.pow(10, it.min) : it.min;
+      const hi = it.log ? Math.pow(10, it.max) : it.max;
+      P[k] = stored(it, Math.min(Math.max(shown(it, P[k]), lo), hi));
+      setNum(it, s.inp, P[k]);
       continue;
     }
     s.inp.value = P[k];
