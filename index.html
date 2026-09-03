@@ -153,8 +153,8 @@ const CONTROLS = [
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
      hint:'Chamber conditions ramp from ambient to full over this interval, smoothstep in ' +
           'time. Shorter ramps produce a stronger starting shock.' },
-   { k:'chamR',   t:'Chamber radius',        min:5,   max:60,  step:0.5, v:25,   unit:'mm', rebuild:true },
-   { k:'chamLen', t:'Chamber length',        min:10,  max:200, step:1,   v:50,   unit:'mm', rebuild:true,
+   { k:'chamR',   t:'Chamber radius',        min:5,   max:500, step:0.5, v:25,   unit:'mm', rebuild:true },
+   { k:'chamLen', t:'Chamber length',        min:10,  max:1500,step:1,   v:50,   unit:'mm', rebuild:true,
      hint:'Gas dynamics only. No injector elements, no combustion, no characteristic length; ' +
           'the head end is held at stagnation conditions.' },
  ]},
@@ -173,18 +173,18 @@ const CONTROLS = [
           'weight raises performance: hydrolox is 693 against kerolox at 375.' },
  ]},
  { group:'Nozzle', open:true, items:[
-   { k:'throatR',  t:'Throat radius',        min:1,  max:40,  step:0.25, v:8,    unit:'mm', rebuild:true,
+   { k:'throatR',  t:'Throat radius',        min:1,  max:400, step:0.25, v:8,    unit:'mm', rebuild:true,
      hint:'Once choked, mass flow is proportional to throat area. The grid needs at least ' +
           'about 6 cells across the throat radius; the panel reports the current figure.' },
-   { k:'nozExitR', t:'Exit radius',          min:1,  max:80,  step:0.25, v:14.75,unit:'mm', rebuild:true,
+   { k:'nozExitR', t:'Exit radius',          min:1,  max:900, step:0.25, v:14.75,unit:'mm', rebuild:true,
      hint:'With the throat radius this fixes the expansion ratio, and so the ambient pressure ' +
           'the nozzle is matched to. For an aerospike it is the cowl lip radius, and the spike ' +
           'root radius follows as √(exit² − throat²), which keeps the annular throat area equal ' +
           'to π·throat².' },
-   { k:'convLen',  t:'Converging length',    min:2,  max:120, step:1,    v:20,   unit:'mm', rebuild:true,
+   { k:'convLen',  t:'Converging length',    min:2,  max:900, step:1,    v:20,   unit:'mm', rebuild:true,
      hint:'Raised-cosine contour, meeting both the chamber wall and the throat at zero slope. ' +
           'The subsonic flow here is insensitive to the shape.' },
-   { k:'divLen',   t:'Diverging length',     min:2,  max:250, step:1,    v:25,   unit:'mm', rebuild:true,
+   { k:'divLen',   t:'Diverging length',     min:2,  max:2000,step:1,    v:25,   unit:'mm', rebuild:true,
      hint:'Sets the divergence half-angle, and with it the cosine loss and the separation ' +
           'margin. 12 to 18° is the usual conical range. Conical and bell only: an aerospike ' +
           'contour has one length that satisfies the characteristics, so its spike length ' +
@@ -208,11 +208,11 @@ const CONTROLS = [
      hint:'Affects the flow only when there is a freestream. Flat gives a detached bow shock ' +
           'and a subsonic pocket; pointy gives an attached oblique shock above its Mach angle; ' +
           'rounded is intermediate.' },
-   { k:'noseLen',  t:'Nose cone length',     min:5,  max:300, step:1,    v:55,   unit:'mm', rebuild:true,
+   { k:'noseLen',  t:'Nose cone length',     min:5,  max:3000,step:1,    v:55,   unit:'mm', rebuild:true,
      hint:'Ignored when the nose is flat.' },
-   { k:'foreLen',  t:'Forebody length',      min:0,  max:400, step:1,    v:40,   unit:'mm', rebuild:true,
+   { k:'foreLen',  t:'Forebody length',      min:0,  max:4000,step:1,    v:40,   unit:'mm', rebuild:true,
      hint:'Solid body between the nose base and the injector face.' },
-   { k:'wallT',    t:'Wall thickness',       min:0.5,max:20,  step:0.5,  v:3,    unit:'mm', rebuild:true,
+   { k:'wallT',    t:'Wall thickness',       min:0.5,max:100, step:0.5,  v:3,    unit:'mm', rebuild:true,
      hint:'Body radius is max(chamber, nozzle exit) + this, so the base is always an annulus.' },
  ]},
  { group:'Atmosphere', open:true, items:[
@@ -258,10 +258,11 @@ const CONTROLS = [
    { k:'kickAngle', t:'Pitch-over angle',  min:0.5, max:30, step:0.5, v:5, unit:'°',
      hint:'Angle from vertical applied at the pitch-over. Thereafter dγ/dt = −g·cos γ / v, so ' +
           'the turn rate rises as the vehicle slows.' },
-   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:3, step:0.01, v:0.3, log:true, unit:'kg',
-     hint:'Logarithmic, 0.1 kg to 1 tonne. Should be consistent with the geometry: the default ' +
-          'body is 56 mm across and 250 mm long.' },
-   { k:'propMassLog', t:'Propellant mass', min:-1, max:3, step:0.01, v:0, log:true, unit:'kg',
+   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:5, step:0.01, v:0.3, log:true, unit:'kg',
+     hint:'Logarithmic, 0.1 kg to 100 tonnes, so a real vehicle fits. The trajectory is a ' +
+          'point mass, and only the ratio of thrust to weight and the frontal area reach it, ' +
+          'so mass need not match the drawn geometry.' },
+   { k:'propMassLog', t:'Propellant mass', min:-1, max:5, step:0.01, v:0, log:true, unit:'kg',
      hint:'Burn time is this divided by the measured mass flow. There is no consumption-rate ' +
           'input because the mass flow is an output of the solver.' },
    { k:'ffLog',    t:'Trajectory fast-forward', min:0, max:6, step:0.05, v:1.3, log:true,
@@ -282,7 +283,7 @@ const CONTROLS = [
    { k:'dyeDiss',  t:'Exhaust tracer fade',  min:0, max:0.05, step:0.001, v:0, unit:'/ms' },
  ]},
  { group:'Domain & solver', items:[
-   { k:'downrange', t:'Plume domain',        min:50, max:1500,step:10,   v:300,  unit:'mm', rebuild:true,
+   { k:'downrange', t:'Plume domain',        min:50, max:12000,step:10,  v:300,  unit:'mm', rebuild:true,
      hint:'Distance from the nozzle exit plane to the outflow boundary.' },
    { k:'rDomain',   t:'Radial domain',       min:1.5,max:6,   step:0.25, v:2.5,  rebuild:true,
      unit:'× body radius',
@@ -2233,8 +2234,18 @@ function advanceFlight(simmedMs){
     S.fpa = (90 - P.kickAngle) * Math.PI / 180;          // deliberate pitch-over off the pad
     S.kicked = true;
   }
+  /* Ignition and burnout are flow-time transients lasting a millisecond or two, and the
+     fast-forward turns that into tens of seconds of flight. Neither is a state the quasi-steady
+     coupling can represent: during the ramp the nozzle has not reached its operating point, and
+     after the tanks are dry any thrust still in the flow field is being paid for by propellant
+     that does not exist. So the trajectory waits for the chamber to come up to pressure, and it
+     stops taking thrust the moment the propellant runs out. */
+  if (S.t < P.riseMs) return;
+  const spent = propMass() > 0 && S.propLeft <= 0;
+  const netF = spent ? -Math.max(m.drag, 0) : m.net;
+
   const sinF = climbing() ? Math.sin(S.fpa) : 0;
-  const v = S.vFlight + (m.net / mass - g * sinF) * dtF;
+  const v = S.vFlight + (netF / mass - g * sinF) * dtF;
   // The solver represents nose-first flight only, so a vertical climb terminates at apogee
   // rather than reversing. Requires prior climb: a vehicle on the pad is also at zero airspeed.
   if (climbing() && !turning() && S.vFlight > 1 && v <= 0) S.apogee = true;

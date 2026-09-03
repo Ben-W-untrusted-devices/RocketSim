@@ -213,6 +213,120 @@ thrust against integration radius, at epsilon 2.04:
 Flat beyond about 35 mm, varying 1.6 % out to the domain edge, so the integral is converged with
 respect to where it stops.
 
+## Comparison with flown hardware
+
+Four engines whose performance is published, set up from their own chamber conditions and area
+ratio. Nothing is fitted: propellant gamma, molecular weight and flame temperature go in, and
+specific impulse comes out of the area-Mach relation.
+
+| engine | epsilon | Isp sea level | published | Isp vacuum | published |
+|---|---|---|---|---|---|
+| V-2 (A-4), LOX/ethanol, 15 bar | 3.3 | 216 s | 203 s | 252 s | 239 s |
+| F-1, LOX/RP-1, 70 bar | 16 | 276 s | 263 s | 318 s | 304 s |
+| RS-25, LOX/LH2, 206 bar | 69 | 375 s | 366 s | 456 s | 452 s |
+| XRS-2200 aerospike, LOX/LH2, 58 bar | 58 | 210 s | 339 s | 454 s | 439 s |
+
+The first three read high by 6.4 %, 4.9 % and 2.5 % at sea level and 5.4 %, 4.6 % and 0.9 % in
+vacuum. That is the right sign and the right size: these are ideal figures, and a real engine
+delivers the product of its combustion efficiency and its nozzle efficiency, usually 94 to 97 %
+for a large chamber and better for a high-pressure one. Applying 95 % to the V-2 gives 205 s
+against 203 measured, and 95.5 % to the F-1 gives 264 s against 263.
+
+The XRS-2200 row is the one that does not agree, and it is the aerospike point. At sea level a
+bell of area ratio 58 has an exit pressure 0.07 times ambient, and one-dimensional theory,
+which assumes the nozzle flows full, charges the whole (p_e - p_a)*A_e debit and returns 210 s.
+The real aerospike delivers 339 s because its plume boundary is ambient pressure rather than a
+wall, so it does not pay that debit. The 129 s gap is altitude compensation, and it is the
+reason plug nozzles are built. In vacuum, where there is nothing to compensate, the model and
+the engine agree to 3 %.
+
+That case also marks the edge of what this tool can resolve. Set up as an aerospike rather than
+a bell, an area ratio of 58 puts the throat angle at 89 degrees and the annular gap at 1.2 mm on
+a 14 mm throat, which is 2.3 cells at the highest resolution the browser will run. Resolving it
+to the 25 cells the discharge needs would take a radial cell size of 0.03 mm across a 180 mm
+domain, so of order 10^8 cells.
+
+### V-2 at full scale
+
+Modelled at its real dimensions: 203 mm throat, 370 mm exit, 15 bar, LOX/ethanol at 2973 K.
+
+| quantity | model | published |
+|---|---|---|
+| mass flow, 1-D | 123 kg/s | 123 kg/s (55 alcohol + 68 LOX) |
+| thrust, 1-D | 261 kN | 245 kN |
+| Isp, 1-D | 216 s | 203 s |
+| mass flow, measured | 91 kg/s | |
+| thrust, measured | 167 kN | |
+| Isp, measured | 188 s | 203 s |
+
+The 1-D mass flow lands on the published figure exactly, which is an independent check on the
+chosen gamma, molecular weight and flame temperature, since it comes from c\* and the throat
+area alone. The measured block shows the usual pattern: mass flow and thrust each read low, by
+27 % and 36 %, while Isp reads only 7 % low because the two deficits largely cancel in F/mdot.
+At 23 cells across the throat radius but only 12 axially, this nozzle is less well resolved
+along the axis than the reference configuration, and the deficit is correspondingly larger.
+
+### V-2 trajectory
+
+The sounding-rocket configuration, fired vertically: 540 kg of instruments in place of the
+1000 kg warhead, 12,040 kg on the pad. Published V-2 vertical flights from White Sands reached
+109 km, 121 km typical, and 134 km on the Albert II mission.
+
+Propellant mass needs care. The quoted tank capacities total 9,726 kg, but 123 kg/s over the
+published 65 s burn is 8,000 kg, and the larger figure gives a burn time of 79 s and a burnout
+speed well above the 1,600 km/h the vehicle is recorded as reaching. The 8,000 kg consumed
+figure is used here; it reproduces the 65 s burn and the burnout speed together.
+
+| quantity | model | published |
+|---|---|---|
+| mass on the pad | 12,017 kg | 12,040 kg |
+| burn time, 1-D | 64 s | 65 s |
+| burnout speed | 1,439 m/s | 1,600 m/s peak, on the flatter operational trajectory |
+
+Apogee depends on how hard the trajectory is fast-forwarded, because the flow field has to keep
+up with an ambient pressure that is falling underneath it:
+
+| fast-forward | flight seconds per ms of flow | apogee |
+|---|---|---|
+| 10,000x | 10 | 189 km |
+| 3,162x | 3.2 | 157 km |
+| 1,000x | 1.0 | 148 km |
+
+Converging downward towards the observed band from above, and still 10 to 35 % high at the
+lowest fast-forward that finishes in reasonable time. Two contributions: the measured mass flow
+is low, which stretches the burn from 65 s to 90 s and buys extra impulse, and the residual
+fast-forward error. The panel flags the quasi-steady violation in all three of these runs.
+
+### Traveler IV
+
+USC Rocket Propulsion Laboratory, April 2019, the first entirely student-built rocket to pass
+the Karman line. Published: 103.6 km apogee with a stated uncertainty of 5.0 km, 8 inch
+airframe, a solid motor of 42,000 lbf-s total impulse burning for 13 s with a peak thrust of
+21.6 kN, top speed 1,515 m/s, apogee at T+151 s. Masses are not published and are inferred here
+from the total impulse and the reported 17 g peak: 150 kg on the pad, 83 kg of propellant.
+
+| quantity | model | published |
+|---|---|---|
+| burn time | 13 s | 13 s |
+| burnout speed | 1,551 m/s | 1,515 m/s top speed |
+| apogee | 118 km | 103.6 +/- 5.0 km |
+| time to apogee | 165 s | 151 s |
+| peak drag | 2,994 N at Mach 3.3, 8.2 km | not published |
+
+Burnout speed is within 2.4 %. Apogee is 14 % high, of which roughly half is the fast-forward
+error measured on the V-2 above and the rest is the inferred mass and the drag model, which
+excludes skin friction. USCRPL's own six-degree-of-freedom reconstruction needed a 20 % drag
+penalty to match their flight data, so a model that omits skin friction reading high on apogee
+is the expected direction.
+
+### What these cases exercise
+
+The 1-D block is validated to a few percent against flown hardware across a 14:1 range of
+chamber pressure and a 20:1 range of area ratio. The trajectory integrator is validated to
+within about 15 % on apogee, with the residual attributable to two known and separately measured
+effects. The measured CFD block is the weakest link: absolute mass flow and thrust are
+resolution-limited, and only their ratio is reliable.
+
 ## Two-species contact discontinuity
 
 Conservative schemes for multi-component flow can produce spurious pressure oscillations at

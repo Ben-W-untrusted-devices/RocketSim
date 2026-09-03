@@ -14,8 +14,8 @@ and the control panel](docs/img/app.png)
 The 1-D isentropic figures are shown next to the simulated ones, so the cases where they diverge
 are visible.
 
-Measured performance, grid convergence and solver checks are in
-[docs/validation.md](docs/validation.md).
+Measured performance, grid convergence, solver checks and comparisons against flown hardware
+(V-2, F-1, RS-25, Traveler IV) are in [docs/validation.md](docs/validation.md).
 
 ## Requirements
 
