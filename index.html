@@ -306,6 +306,11 @@ const CONTROLS = [
    { k:'zAspect',   t:'Axial cell stretch',  min:1,  max:4,   step:0.25, v:2,    rebuild:true,
      hint:'Axial cell size as a multiple of radial. The timestep is set by the axial wave ' +
           'speed, so stretching reduces cost. Use 1 when measuring shock-cell spacing.' },
+   { k:'bodyFit', t:'Body-fitted nozzle grid', kind:'check', v:1,
+     hint:'Remaps the radial coordinate so a fixed share of the cells lies between the two ' +
+          'walls of the nozzle passage, and grid lines run along the walls rather than ' +
+          'across them. Off, the grid is uniform and the throat is resolved only as well as ' +
+          'the whole domain is. The panel reports cells across the throat either way.' },
    { k:'res',       t:'Radial cells',        min:48, max:352, step:16,   v:112,  rebuild:true,
      hint:'Cost is roughly linear in this: the timestep shrinks with cell size, so a finer ' +
           'grid costs both more cells and more steps.' },
@@ -668,7 +673,7 @@ const PRESETS = [
    p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288,
        gSurf:9.81, vAmb:0,
        pcBar:20, throatR:14, nozExitR:26, chamR:38, convLen:20, nozShape:2, spikeTrunc:100,
-       noseType:2, rDomain:1.5, res:256, downrange:200 } },
+       noseType:2, rDomain:1.5, res:128, downrange:200 } },
  { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
    p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
        pcBar:20, throatR:8, nozExitR:13.25, convLen:20, divLen:25, nozShape:1, noseType:2 } },
@@ -735,6 +740,107 @@ const S = {
 };
 var FIXED_DT = null, EXPORTING = false;
 
+/* ---- body-fitted radial mapping --------------------------------------------------
+   A uniform grid has to resolve a throat a millimetre across inside a domain a metre long,
+   and pays for that spacing everywhere. Here the radial coordinate is remapped per axial
+   station so that a fixed share of the radial cells lies between the two walls of the nozzle
+   passage, whatever that passage is doing. Grid lines then run along the walls instead of
+   cutting across them, and the cells follow the passage as it contracts.
+
+   The mapping is defined on cell corners, so neighbouring cells share a face exactly. Away
+   from the nozzle it relaxes to the uniform grid, so the plume and the external flow are
+   unaffected. */
+const FIT_CELLS = 30;                 // radial cells wanted across the passage at its narrowest
+
+/* Inner and outer wall of the passage at a station, mirroring the shader's own geometry.
+   Returns null where there is no passage. */
+function passageAt(z){
+  const G = GEO;
+  if (z < G.zInj || z > G.zExit) return null;
+  let inner = 0, outer;
+  if (isSpike()){
+    if (z <= G.zArc) inner = G.plugChamR;
+    else if (z < G.zRoot){
+      const sn = Math.min(Math.max((z - G.zArc) / Math.max(G.turnR, 1e-9), -1), 1);
+      inner = G.arcOr + G.turnR * Math.sqrt(Math.max(1 - sn * sn, 0));
+    } else {
+      const d = z - G.zRoot;
+      if (d > G.spikeBuilt) inner = 0;
+      else { const f = Math.min(Math.max(d / G.spikeFull, 0), 1) * (SPIKE_N - 1);
+             const i0 = Math.floor(f), t = G.spikeTable;
+             inner = t[i0] + (t[Math.min(i0 + 1, SPIKE_N - 1)] - t[i0]) * (f - i0); }
+    }
+    if (z <= G.zConv0) outer = G.chamR;
+    else if (z >= G.zArc){
+      const sn = Math.min(Math.max((z - G.zArc) / Math.max(G.turnR + G.turnGap, 1e-9), -1), 1);
+      outer = G.arcOr + (G.turnR + G.turnGap) * Math.sqrt(Math.max(1 - sn * sn, 0));
+      if (z > G.zThroat) outer = G.nozExitR;      // past the lip there is no wall; hold the lip
+    } else {
+      const t = (z - G.zConv0) / Math.max(G.zArc - G.zConv0, 1e-9);
+      outer = G.chamR + (G.arcOr + G.turnR + G.turnGap - G.chamR) * (t * t * (3 - 2 * t));
+    }
+  } else {
+    if (z <= G.zConv0) outer = G.chamR;
+    else if (z <= G.zThroat){
+      const t = Math.min(Math.max((z - G.zConv0) / Math.max(G.zThroat - G.zConv0, 1e-9), 0), 1);
+      outer = G.throatR + (G.chamR - G.throatR) * 0.5 * (1 + Math.cos(Math.PI * t));
+    } else {
+      const t = Math.min(Math.max((z - G.zThroat) / Math.max(G.zExit - G.zThroat, 1e-9), 0), 1);
+      outer = P.nozShape < 0.5 ? G.throatR + (G.nozExitR - G.throatR) * t
+                               : G.throatR + (G.nozExitR - G.throatR) * (2 * t - t * t);
+    }
+  }
+  if (!(outer > inner + 1e-6)) return null;
+  return { inner, outer };
+}
+
+function buildRadialMap(){
+  const Nz = S.Nz, Nr = S.Nr, Rmax = S.Rmax, dz = S.dz;
+  const RN = new Float32Array((Nz + 1) * (Nr + 1));
+  const G = GEO;
+  // share of the radial cells given to the passage, capped so the rest of the domain keeps some
+  const fitOn = P.bodyFit > 0.5;
+  const blend = Math.max(0.12 * (G.zExit - G.zInj), 8 * dz);
+  for (let iz = 0; iz <= Nz; iz++){
+    const z = iz * dz;
+    const pa = fitOn ? passageAt(z) : null;
+    let w = 0;
+    if (pa){
+      // taper the fitting in and out so the mapping stays smooth in z
+      const dIn = z - G.zInj, dOut = G.zExit - z;
+      w = Math.min(1, Math.max(0, Math.min(dIn, dOut) / blend));
+      w = w * w * (3 - 2 * w);
+    }
+    const base = iz * (Nr + 1);
+    if (w <= 0){
+      for (let ir = 0; ir <= Nr; ir++) RN[base + ir] = Rmax * ir / Nr;
+      continue;
+    }
+    const a = pa.inner, b = pa.outer;
+    /* Enough cells across the passage to resolve it, without starving the rest. The floor is a
+       share rather than a count, so raising the radial resolution still refines the throat
+       instead of only refining the plume. */
+    const fPass = Math.min(0.60, Math.max(FIT_CELLS / Nr, 0.18, (b - a) / Rmax));
+    const fIn   = a > 0 ? Math.min(0.25, Math.max(0.06, (a / Rmax) * (1 - fPass))) : 0;
+    const fOut  = 1 - fIn - fPass;
+    for (let ir = 0; ir <= Nr; ir++){
+      const e = ir / Nr;
+      let rf;
+      if (e <= fIn)            rf = a * (e / Math.max(fIn, 1e-9));
+      else if (e <= fIn+fPass) rf = a + (b - a) * (e - fIn) / fPass;
+      else                     rf = b + (Rmax - b) * (e - fIn - fPass) / Math.max(fOut, 1e-9);
+      RN[base + ir] = (1 - w) * (Rmax * e) + w * rf;
+    }
+    RN[base] = 0; RN[base + Nr] = Rmax;
+  }
+  S.RN = RN;
+  // the narrowest radial spacing anywhere sets the timestep, so record it
+  let hMin = Infinity;
+  for (let iz = 0; iz <= Nz; iz++){ const b = iz * (Nr + 1);
+    for (let ir = 0; ir < Nr; ir++) hMin = Math.min(hMin, RN[b + ir + 1] - RN[b + ir]); }
+  S.hrMin = hMin;
+}
+
 function buildGrid(){
   computeGeometry();
   S.Lz = GEO.Lz; S.Rmax = GEO.Rmax;
@@ -742,6 +848,7 @@ function buildGrid(){
   S.dr = S.Rmax / S.Nr;
   S.Nz = Math.max(64, Math.min(3000, Math.round(S.Lz / (S.dr * P.zAspect))));
   S.dz = S.Lz / S.Nz;
+  buildRadialMap();
   compAlloc();
   resizeCanvas();
   resetSim();
@@ -774,8 +881,26 @@ function probeIz(){
    compares against the choked-throat figure. The momentum-plus-pressure integral is over
    the nozzle exit area only: further out, the plane cuts freestream, whose momentum is not
    thrust. */
+/* Radial spacing where it matters: at the throat station, which under the body-fitted mapping
+   is much finer than the nominal one. */
+function throatSpacing(){
+  if (!S.RN || !S.Nz) return S.dr;
+  const iz = Math.max(0, Math.min(S.Nz - 1, Math.round(GEO.zThroat / S.dz)));
+  const b = iz * (S.Nr + 1);
+  let h = Infinity;
+  for (let ir = 0; ir < S.Nr; ir++) h = Math.min(h, S.RN[b + ir + 1] - S.RN[b + ir]);
+  return Number.isFinite(h) && h > 0 ? h : S.dr;
+}
+
+/* Radial node position, from the mapping the solver is actually using. */
+function rNodeAt(iz, ir){
+  const i = Math.min(Math.max(iz, 0), S.Nz) * (S.Nr + 1) + Math.min(Math.max(ir, 0), S.Nr);
+  return S.RN ? S.RN[i] : (ir * S.Rmax / S.Nr);
+}
 function consumeProbeArr(buf, t){
   const pa = pAmbPa();
+  const izP = probeIz().iz;                 // the plane the column was taken on
+  const rLo = ir => rNodeAt(izP, ir), rHi = ir => rNodeAt(izP, ir + 1);
   /* A bell discharges through a known area, so the integral is bounded by the exit radius.
      A plug nozzle has no outer wall: the plume expands past the cowl lip by an amount that
      depends on ambient pressure, so the boundary is taken from the exhaust tracer instead. */
@@ -783,7 +908,7 @@ function consumeProbeArr(buf, t){
   if (isSpike()){
     let irMax = 0;
     for (let ir = 0; ir < S.Nr; ir++) if (buf[ir*8+4] > 0.02) irMax = ir;
-    rLim = Math.min((irMax + 1.5) * S.dr, 0.8 * S.Rmax);
+    rLim = Math.min(rHi(irMax) + 0.5 * (rHi(irMax) - rLo(irMax)), 0.8 * S.Rmax);
   }
   let axis = 0, mx = 0, mdot = 0, mdotAll = 0, thrust = 0, machMax = 0, Taxis = 0, Yaxis = 0;
   // the axial pressure force on the external surface, summed over the stations the GPU wrote
@@ -799,9 +924,9 @@ function consumeProbeArr(buf, t){
     if (ir === 0){ axis = uz; Taxis = T; Yaxis = Y; }
     if (Math.abs(uz) > Math.abs(mx)) mx = uz;
     if (M > machMax) machMax = M;
-    const rc = (ir + 0.5) * S.dr;
+    const ra = rLo(ir), rb = rHi(ir), rc = 0.5 * (ra + rb);
     if (rc > rLim) continue;
-    const dA = 2 * Math.PI * rc * S.dr * 1e-6;               // mm² -> m²
+    const dA = Math.PI * (rb * rb - ra * ra) * 1e-6;         // mm² -> m², exact for the ring
     mdot    += rho * uz * Y * dA;                             // kg/s of propellant
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
@@ -839,7 +964,7 @@ function updateMetrics(){
         m = S.meas || { axis:0, mx:0, mdot:0, mdotAll:0, thrust:0, machMax:0, Taxis:0, Yaxis:0,
                         drag:0, net:0, rLim:0 };
   const flags = [];
-  const cellsAcrossThroat = D.rt / S.dr;
+  const cellsAcrossThroat = D.rt / throatSpacing();
 
   if (!D.choked) flags.push(['bad',
     `<b>Nozzle not choked.</b> Chamber pressure is ${fmt(D.pc/D.pa,2)}× ambient, below the ` +
@@ -893,7 +1018,7 @@ function updateMetrics(){
 
   /* A plug nozzle's throat is an annular slot, and its width is measured perpendicular to
      the flow, so it is the gap and not a radius that has to be resolved. */
-  const throatCells = D.spike ? D.spikeGap / S.dr : cellsAcrossThroat;
+  const throatCells = D.spike ? D.spikeGap / throatSpacing() : cellsAcrossThroat;
   const wantCells = D.spike ? 25 : 10;
   if (throatCells < 0.6 * wantCells) flags.push(['bad',
     `<b>${D.spike ? 'Annular throat' : 'Throat'} resolved by ${fmt(throatCells,1)} cells ` +
@@ -1332,6 +1457,10 @@ function packParams(slot, dt, weight, simT){
 
 /* ---- geometry and thermodynamics, shared by the kernels and the display shader ---- */
 const WGSL_GEOM = WGSL_PARAMS + `
+/* Grid metrics, shared by the solver and the renderer: per cell the fluid volume fraction and
+   the open fraction of its two plus-side faces, and per corner the radial position the mapping
+   puts it at. */
+@group(1) @binding(9) var<storage, read_write> CUT : array<vec4<f32>>;
 const FLUID  : i32 = 0;
 const WALL   : i32 = 1;
 const PLENUM : i32 = 2;
@@ -1459,8 +1588,54 @@ fn solidAt(p : vec2<f32>) -> i32 {
   }
   return WALL;
 }
+/* ---- mapped grid ------------------------------------------------------------------
+   The radial coordinate is a function of the axial station, so a fixed share of the cells can
+   be held between the walls of the nozzle passage. The mapping is stored on cell corners, in
+   the fourth component of the grid-metric buffer, which makes neighbouring cells share a face
+   exactly. Axial faces stay perpendicular to the axis; radial faces follow the mapping and
+   carry a tilted normal.
+
+   With a uniform mapping every expression below reduces to the constant-spacing one, so the
+   scheme is unchanged when body fitting is off. */
+fn gmIdx(iz : i32, ir : i32) -> u32 {
+  return u32(clamp(ir, 0, P.cells.y) * (P.cells.x + 1) + clamp(iz, 0, P.cells.x));
+}
+fn rNode(iz : i32, ir : i32) -> f32 { return CUT[gmIdx(iz, ir)].w; }
+fn zNode(iz : i32) -> f32 { return f32(iz) * P.d.x; }
+
+/* Radial extent of a cell, and the radius of its centroid. */
+fn cellHr(iz : i32, ir : i32) -> f32 {
+  return 0.5 * ((rNode(iz, ir + 1) - rNode(iz, ir)) + (rNode(iz + 1, ir + 1) - rNode(iz + 1, ir)));
+}
+fn cellR(iz : i32, ir : i32) -> f32 {
+  let h0 = rNode(iz, ir + 1) - rNode(iz, ir);
+  let h1 = rNode(iz + 1, ir + 1) - rNode(iz + 1, ir);
+  let m0 = 0.5 * (rNode(iz, ir) + rNode(iz, ir + 1));
+  let m1 = 0.5 * (rNode(iz + 1, ir) + rNode(iz + 1, ir + 1));
+  return (h0 * m0 + h1 * m1) / max(h0 + h1, 1e-12);
+}
+/* Volume of the revolved cell, and the planar area it is swept from, both without the 2*pi. */
+fn cellVol(iz : i32, ir : i32) -> f32 { return cellR(iz, ir) * P.d.x * cellHr(iz, ir); }
+fn cellArea(iz : i32, ir : i32) -> f32 { return P.d.x * cellHr(iz, ir); }
+
+/* Area of the axial face at station iz spanning ir..ir+1, without the 2*pi. Its normal is +z. */
+fn faceAz(iz : i32, ir : i32) -> f32 {
+  let r0 = rNode(iz, ir); let r1 = rNode(iz, ir + 1);
+  return 0.5 * (r1 * r1 - r0 * r0);
+}
+/* The radial face at ir spanning iz..iz+1: area without the 2*pi, and its unit normal. */
+fn faceArArea(iz : i32, ir : i32) -> f32 {
+  let dR = rNode(iz + 1, ir) - rNode(iz, ir);
+  return 0.5 * (rNode(iz, ir) + rNode(iz + 1, ir)) * sqrt(P.d.x * P.d.x + dR * dR);
+}
+fn faceArN(iz : i32, ir : i32) -> vec2<f32> {
+  let dR = rNode(iz + 1, ir) - rNode(iz, ir);
+  let L = sqrt(P.d.x * P.d.x + dR * dR);
+  return vec2<f32>(-dR / L, P.d.x / L);
+}
+
 fn solidCell(iz : i32, ir : i32) -> i32 {
-  return solidAt(vec2<f32>((f32(iz) + 0.5) * P.d.x, (f32(ir) + 0.5) * P.d.y));
+  return solidAt(vec2<f32>((f32(iz) + 0.5) * P.d.x, cellR(iz, ir)));
 }
 fn blocked(iz : i32, ir : i32) -> bool { return solidCell(iz, ir) == WALL; }
 
@@ -1495,7 +1670,6 @@ const WGSL_COMP = WGSL_GEOM + `
 @group(1) @binding(6) var<storage, read_write> wav : array<vec2<f32>>;
 @group(1) @binding(7) var<storage, read>       Uold : array<vec4<f32>>; // U^n for RK stage 2
 @group(1) @binding(8) var<storage, read>       Dold : array<f32>;
-@group(1) @binding(9) var<storage, read_write> CUT : array<vec4<f32>>;  // vf, +z aperture, +r aperture
 /* The probe and force gathers read the same state but write a small result array, and they
    run once a frame rather than once a stage, so they get their own layout. */
 @group(2) @binding(0) var<storage, read_write> probeB : array<f32>;
@@ -1513,6 +1687,12 @@ fn Yat(iz : i32, ir : i32) -> f32 {
 }
 /* The tangential/normal swap for radial faces, applied to a whole primitive state. */
 fn swapNT(a : Prim) -> Prim { return Prim(a.w.xzyw, a.Y); }
+/* Rotate a state into the frame of a face whose unit normal is n, so the Riemann problem is
+   always solved along the normal. With n = (0,1) this is the plain swap above. */
+fn rotToN(a : Prim, n : vec2<f32>) -> Prim {
+  return Prim(vec4<f32>(a.w.x, a.w.y * n.x + a.w.z * n.y,
+                             -a.w.y * n.y + a.w.z * n.x, a.w.w), a.Y);
+}
 
 fn minmod(a : f32, b : f32) -> f32 {
   if (a * b <= 0.0) { return 0.0; }
@@ -1650,19 +1830,22 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
   let bR = blocked(iz, min(ir, P.cells.y - 1));
   if (bL && bR) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }
 
+  // this face follows the mapping, so its normal is generally not the radial direction
+  let nrm = faceArN(iz, ir);
+
   var wL : Prim; var wR : Prim;
   if (bL) {
-    wR = swapNT(Wat(iz, ir));                          // (rho, ur, uz, p): normal first
+    wR = rotToN(Wat(iz, ir), nrm);
     wL = reflectN(wR);
   } else if (bR) {
-    wL = swapNT(Wat(iz, ir - 1));
+    wL = rotToN(Wat(iz, ir - 1), nrm);
     wR = reflectN(wL);
   } else if (ir == P.cells.y) {                        // far field: zero radial gradient
-    wL = swapNT(Wat(iz, P.cells.y - 1));
+    wL = rotToN(Wat(iz, P.cells.y - 1), nrm);
     wR = wL;
   } else {
-    let wm1 = swapNT(Wat(iz, ir - 1)); let w0 = swapNT(Wat(iz, ir));
-    var wm2 = swapNT(Wat(iz, ir - 2)); var wp1 = swapNT(Wat(iz, ir + 1));
+    let wm1 = rotToN(Wat(iz, ir - 1), nrm); let w0 = rotToN(Wat(iz, ir), nrm);
+    var wm2 = rotToN(Wat(iz, ir - 2), nrm); var wp1 = rotToN(Wat(iz, ir + 1), nrm);
     if (ir - 2 < 0 || blocked(iz, ir - 2)) { wm2 = wm1; }
     if (ir + 1 >= P.cells.y || blocked(iz, ir + 1)) { wp1 = w0; }
     wL = reconL(wm2, wm1, w0);
@@ -1670,19 +1853,22 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
     lowMach(&wL, &wR);
   }
   let F = hllc(floorPrim(wL), floorPrim(wR));
-  Fr[fi] = Flux(F.f.xzyw, F.y);                        // back to (rho, rho*uz, rho*ur, E)
+  // rotate the momentum flux back into (z, r)
+  let fz = F.f.y * nrm.x - F.f.z * nrm.y;
+  let fr = F.f.y * nrm.y + F.f.z * nrm.x;
+  Fr[fi] = Flux(vec4<f32>(F.f.x, fz, fr, F.f.w), F.y);
 }
 
 /* ---- viscous stress and conduction, central differences at cell centres ----
    The caller has already loaded the four neighbours, so they are passed in rather than
    fetched again: every primitive costs two buffer loads now that the mass fraction has to
    come with it, and this kernel is memory bound. */
-fn muEff(ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
+fn muEff(iz : i32, ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
          wn : vec4<f32>, ws : vec4<f32>) -> f32 {
   var nu = P.flu.x;
   if (P.flu.w > 0.0) {                                  // Smagorinsky sub-grid
-    let dz = P.d.x; let dr = P.d.y;
-    let rc = (f32(ir) + 0.5) * dr;
+    let dz = P.d.x; let dr = cellHr(iz, ir);
+    let rc = cellR(iz, ir);
     let duzdz = (wp.y - wm.y) / (2.0 * dz);
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
@@ -1701,8 +1887,12 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x); let ir = i32(g.y);
   if (iz >= P.cells.x || ir >= P.cells.y) { return; }
   let k = u32(ir * P.cells.x + iz);
-  let dz = P.d.x; let dr = P.d.y; let dt = P.dtlz.x;
-  let rc = (f32(ir) + 0.5) * dr;
+  let dz = P.d.x; let dt = P.dtlz.x;
+  // radial spacing and radii come from the mapping; on a uniform grid these are the old values
+  let dr = cellHr(iz, ir);
+  let rc = cellR(iz, ir);
+  let rL = 0.5 * (rNode(iz, ir) + rNode(iz + 1, ir));
+  let rR = 0.5 * (rNode(iz, ir + 1) + rNode(iz + 1, ir + 1));
   let s = solidCell(iz, ir);
 
   /* The injector plenum: pinned to stagnation conditions and full of exhaust. The flux
@@ -1736,34 +1926,38 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
   let fzR = Fz[u32(ir * (P.cells.x + 1) + iz + 1)];
   let frL = Fr[u32(ir * P.cells.x + iz)];
   let frR = Fr[u32((ir + 1) * P.cells.x + iz)];
-  let rL = f32(ir) * dr; let rR = f32(ir + 1) * dr;
-
   let a0 = Wat(iz, ir);
   let w0 = a0.w; let Y0 = a0.Y;
 
-  /* Cut-cell metrics: this cell's fluid volume and the open area of its four faces. The
+  /* Face areas from the mapping, each scaled by the fraction of it that is open. The
      minus-side aperture of a cell is the plus-side aperture of its neighbour. */
-  let cut0 = CUT[k];
+  let cut0 = CUT[gmIdx(iz, ir)];
   var apZm = 1.0; var apRm = 1.0;
-  if (iz > 0) { apZm = CUT[u32(ir * P.cells.x + iz - 1)].y; }
-  if (ir > 0) { apRm = CUT[u32((ir - 1) * P.cells.x + iz)].z; }
-  let azp = rc * dr * cut0.y; let azm = rc * dr * apZm;
-  let arp = rR * dz * cut0.z; let arm = rL * dz * apRm;
+  if (iz > 0) { apZm = CUT[gmIdx(iz - 1, ir)].y; }
+  if (ir > 0) { apRm = CUT[gmIdx(iz, ir - 1)].z; }
+  let azp = faceAz(iz + 1, ir) * cut0.y;   let azm = faceAz(iz, ir) * apZm;
+  let arp = faceArArea(iz, ir + 1) * cut0.z; let arm = faceArArea(iz, ir) * apRm;
+  let nrp = faceArN(iz, ir + 1); let nrm = faceArN(iz, ir);
   /* Apertures, but the whole cell volume. Dividing by the fluid fraction instead is the
      textbook cut cell and is conservative, but a sliver cell then sets the timestep for the
      entire grid: at a fraction of 0.15 the effective CFL is nearly seven. The error from
      using the full volume is a local O(h) smearing at the wall, of the same order as the
      scheme already carries there, whereas the aperture imbalance below is what fixes the
      direction of the wall force, and that is what was costing stagnation pressure. */
-  let vol = rc * dz * dr;
+  let vol = cellVol(iz, ir);
 
   var L = (-(azp * fzR.f - azm * fzL.f) - (arp * frR.f - arm * frL.f)) / vol;
-  /* Pressure on the wall inside the cell. A uniform pressure over a closed surface exerts no
-     net force, so the aperture imbalance fixes the wall term exactly, and it carries the true
-     surface normal without that normal ever being formed. With every aperture open this
-     reduces to p/rc, the usual axisymmetric source. */
-  L.y = L.y + (azp - azm) * w0.w / vol;
-  L.z = L.z + (arp - arm) * w0.w / vol;
+  /* Pressure on the wall inside the cell, together with the hoop term axisymmetry produces.
+     Both are written so that a uniform pressure gives exactly zero net force: whatever the
+     open faces fail to balance is what the wall carries, and it comes out with the true
+     surface normal without that normal ever being formed. On an uncut uniform cell the axial
+     term vanishes and the radial one reduces to p/r, the usual axisymmetric source.
+
+     For a closed contour the face normals sum to zero, and the radial components sum to the
+     planar area, so both identities hold on the mapped grid as well as the uniform one. */
+  let pw = w0.w;
+  L.y = L.y + ((azp - azm) + (arp * nrp.x - arm * nrm.x)) * pw / vol;
+  L.z = L.z + (arp * nrp.y - arm * nrm.y) * pw / vol;
 
   // species, from the same Riemann solve as the mass flux
   var Ld = (-(azp * fzR.y - azm * fzL.y) - (arp * frR.y - arm * frL.y)) / vol;
@@ -1773,7 +1967,7 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
     let ap = Wat(iz + 1, ir); let am = Wat(iz - 1, ir);
     let aup = Wat(iz, ir + 1); let adn = Wat(iz, ir - 1);
     let wp = ap.w; let wm = am.w; let wn = aup.w; let ws = adn.w;
-    let mu = muEff(ir, w0, wp, wm, wn, ws);
+    let mu = muEff(iz, ir, w0, wp, wm, wn, ws);
     let dz2 = dz * dz; let dr2 = dr * dr;
     let lapz = (wp.y - 2.0 * w0.y + wm.y) / dz2
              + ((rR * (wn.y - w0.y) - rL * (w0.y - ws.y)) / (rc * dr2));
@@ -1849,34 +2043,40 @@ fn openAt(z : f32, r : f32) -> f32 {
 fn geomFrac(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x); let ir = i32(g.y);
   if (iz >= P.cells.x || ir >= P.cells.y) { return; }
-  let dz = P.d.x; let dr = P.d.y;
-  let z0 = f32(iz) * dz; let r0 = f32(ir) * dr;
-  let hz = dz / f32(SUB); let hr = dr / f32(SUB);
+  let dz = P.d.x;
+  let z0 = f32(iz) * dz;
+  let hz = dz / f32(SUB);
+  // the cell is a quadrilateral in the mapping, so sample it in computational space
+  let R00 = rNode(iz, ir);     let R01 = rNode(iz, ir + 1);
+  let R10 = rNode(iz + 1, ir); let R11 = rNode(iz + 1, ir + 1);
 
-  // volume: the cell is a revolved annulus, so each sample is weighted by its radius
   var vnum = 0.0; var vden = 0.0;
   for (var a = 0; a < SUB; a++) {
-    let z = z0 + (f32(a) + 0.5) * hz;
+    let fa = (f32(a) + 0.5) / f32(SUB);
+    let z = z0 + fa * dz;
+    let lo = mix(R00, R10, fa); let hi = mix(R01, R11, fa);
     for (var b = 0; b < SUB; b++) {
-      let r = r0 + (f32(b) + 0.5) * hr;
-      vden = vden + r;
+      let r = mix(lo, hi, (f32(b) + 0.5) / f32(SUB));
+      vden = vden + r;                          // radius weighting: the cell is revolved
       vnum = vnum + r * openAt(z, r);
     }
   }
-  // +z face: an annulus, so radius-weighted as well
+  // +z face: the annulus at z0 + dz, from R10 to R11, radius-weighted
   var znum = 0.0; var zden = 0.0;
   for (var b = 0; b < SUB; b++) {
-    let r = r0 + (f32(b) + 0.5) * hr;
+    let r = mix(R10, R11, (f32(b) + 0.5) / f32(SUB));
     zden = zden + r;
     znum = znum + r * openAt(z0 + dz, r);
   }
-  // +r face: a cylinder of constant radius, so unweighted
+  // +r face: follows the mapping from (z0, R01) to (z0 + dz, R11)
   var rnum = 0.0;
   for (var a = 0; a < SUB; a++) {
-    rnum = rnum + openAt(z0 + (f32(a) + 0.5) * hz, r0 + dr);
+    let fa = (f32(a) + 0.5) / f32(SUB);
+    rnum = rnum + openAt(z0 + fa * dz, mix(R01, R11, fa));
   }
-  CUT[u32(ir * P.cells.x + iz)] = vec4<f32>(
-    vnum / max(vden, 1e-9), znum / max(zden, 1e-9), rnum / f32(SUB), 0.0);
+  let old = CUT[gmIdx(iz, ir)];
+  CUT[gmIdx(iz, ir)] = vec4<f32>(
+    vnum / max(vden, 1e-9), znum / max(zden, 1e-9), rnum / f32(SUB), old.w);
 }
 
 @compute @workgroup_size(8, 8)
@@ -1888,7 +2088,8 @@ fn waveSpeed(@builtin(global_invocation_id) g : vec3<u32>) {
   let a0 = toPrim(Ua[k], Da[k]);
   let w = a0.w;
   let a = sqrt(gamMix(a0.Y) * w.w / w.x);
-  let sp = (abs(w.y) + a) / P.d.x + (abs(w.z) + a) / P.d.y;
+  // the narrowest cell sets the step, and under the mapping that is the throat
+  let sp = (abs(w.y) + a) / P.d.x + (abs(w.z) + a) / max(cellHr(iz, ir), 1e-9);
   let mach = length(vec2<f32>(w.y, w.z)) / a;
   wav[k] = vec2<f32>(sp, mach);
 }
@@ -1916,7 +2117,7 @@ fn initState(@builtin(global_invocation_id) g : vec3<u32>) {
 fn forceGather(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x);
   if (iz >= P.cells.x) { return; }
-  let dz = P.d.x; let dr = P.d.y; let pa = P.env.y;
+  let dz = P.d.x; let pa = P.env.y;
   let R0 = extR(f32(iz) * dz);
   let R1 = extR(f32(iz + 1) * dz);
   var fz = 0.0;
@@ -1925,11 +2126,10 @@ fn forceGather(@builtin(global_invocation_id) g : vec3<u32>) {
     let forward = R1 > R0;
     var sgn = -1.0; if (forward) { sgn = 1.0; }
     let step = select(1, -1, forward);              // walk away from the surface
-    let ir0 = clamp(i32(rlo / dr), 0, P.cells.y - 1);
-    let ir1 = clamp(i32(rhi / dr), 0, P.cells.y - 1);
-    for (var ir = ir0; ir <= ir1; ir++) {
-      let ra = max(f32(ir) * dr, rlo);
-      let rb = min(f32(ir + 1) * dr, rhi);
+    // the mapping means rings are not evenly spaced, so every one is clipped to the band
+    for (var ir = 0; ir < P.cells.y; ir++) {
+      let ra = max(rNode(iz, ir), rlo);
+      let rb = min(rNode(iz, ir + 1), rhi);
       if (rb <= ra) { continue; }
       var kz = clamp(iz + step, 0, P.cells.x - 1);
       for (var s = 0; s < 8; s++) {
@@ -2004,7 +2204,14 @@ fn diverging(t : f32) -> vec3<f32> {
   let r = abs((uv.y - 0.5) * 2.0 * P.env.x);
   let p2 = vec2<f32>(z, r);
   let iz = clamp(i32(floor(z / P.d.x)), 0, P.cells.x - 1);
-  let ir = clamp(i32(floor(r / P.d.y)), 0, P.cells.y - 1);
+  // the mapping is monotone in ir, so a bisection finds the ring this radius falls in
+  var lo = 0; var hi = P.cells.y;
+  for (var it = 0; it < 12; it++) {
+    if (hi - lo <= 1) { break; }
+    let mid = (lo + hi) / 2;
+    if (r < rNode(iz, mid)) { hi = mid; } else { lo = mid; }
+  }
+  let ir = clamp(lo, 0, P.cells.y - 1);
   var col = vec3<f32>(0.055, 0.07, 0.09);
   let sld = solidAt(p2);
   let fld = i32(SH.field);
@@ -2077,20 +2284,22 @@ async function compInit(){
   /* The gathers read the state and write the probe array, and nothing else. The
      ten-storage-buffer limit applies to a whole pipeline layout, so they cannot borrow the
      flux layout: they get one that names only what they touch. */
-  CP.bglQ = dev.createBindGroupLayout({ entries:[ st(0,true), st(2,true) ] });
+  CP.bglQ = dev.createBindGroupLayout({ entries:[ st(0,true), st(2,true), st(9,false) ] });
   CP.bglR2 = dev.createBindGroupLayout({ entries:[ st(0,false) ] });
   const sr = b => ({ binding:b, visibility:GPUShaderStage.FRAGMENT,
                      buffer:{ type:'read-only-storage' } });
-  CP.bglS = dev.createBindGroupLayout({ entries:[ sr(0), sr(1) ] });
+  CP.bglS = dev.createBindGroupLayout({ entries:[ sr(0), sr(1),
+    { binding:9, visibility:GPUShaderStage.FRAGMENT, buffer:{ type:'storage' } } ] });
 
   const plK = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglF] });
   const plQ = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglQ, CP.bglR2] });
   const plS = dev.createPipelineLayout({ bindGroupLayouts:[WG.bglP, CP.bglS, WG.bglS] });
   CP.pipe = {};
-  for (const n of ['fluxZ','fluxR','update','waveSpeed','initState','geomFrac'])
-    CP.pipe[n] = dev.createComputePipeline({ layout:plK, compute:{ module:modK, entryPoint:n } });
-  for (const n of ['probeGather','forceGather'])
-    CP.pipe[n] = dev.createComputePipeline({ layout:plQ, compute:{ module:modK, entryPoint:n } });
+  for (const [n, pl] of [['fluxZ',plK],['fluxR',plK],['update',plK],['waveSpeed',plK],
+                         ['initState',plK],['geomFrac',plK],
+                         ['probeGather',plQ],['forceGather',plQ]])
+    CP.pipe[n] = dev.createComputePipeline({ label:n, layout:pl,
+                                             compute:{ module:modK, entryPoint:n } });
   CP.pipe.show = dev.createRenderPipeline({ layout:plS,
     vertex:{ module:modS, entryPoint:'vs' },
     fragment:{ module:modS, entryPoint:'fs', targets:[{ format:WG.fmt }] },
@@ -2115,7 +2324,8 @@ function compAlloc(){
   B.Fz = mk((S.Nz + 1) * S.Nr, 32);
   B.Fr = mk(S.Nz * (S.Nr + 1), 32);
   B.wav = mk(nC, 8);
-  B.cut = mk(nC, 16);                     // fluid volume fraction and the two face apertures
+  // (vf, +z aperture, +r aperture, corner radius), over cell corners so faces are shared
+  B.cut = mk((S.Nz + 1) * (S.Nr + 1), 16);
   B.probe = mk(S.Nr * 8 + S.Nz + 8, 4);   // probe column, then one axial force per station
 
   CP.bg = [];
@@ -2130,11 +2340,13 @@ function compAlloc(){
     CP.bg.push([mkbg(a, b), mkbg(b, c)]);
   }
   CP.bgQ = [0,1,2].map(i => dev.createBindGroup({ layout:CP.bglQ, entries:[
-    { binding:0, resource:{ buffer:B.U[i] } }, { binding:2, resource:{ buffer:B.D[i] } }]}));
+    { binding:0, resource:{ buffer:B.U[i] } }, { binding:2, resource:{ buffer:B.D[i] } },
+    { binding:9, resource:{ buffer:B.cut } }]}));
   CP.bgQ2 = dev.createBindGroup({ layout:CP.bglR2, entries:[
     { binding:0, resource:{ buffer:B.probe } }] });
   CP.bgS = [0,1,2].map(i => dev.createBindGroup({ layout:CP.bglS, entries:[
-    { binding:0, resource:{ buffer:B.U[i] } }, { binding:1, resource:{ buffer:B.D[i] } } ]}));
+    { binding:0, resource:{ buffer:B.U[i] } }, { binding:1, resource:{ buffer:B.D[i] } },
+    { binding:9, resource:{ buffer:B.cut } } ]}));
 
   // max-reduction chain over cells
   CP.red = [];
@@ -2155,6 +2367,13 @@ function compAlloc(){
     { binding:0, resource:{ buffer: i === 0 ? B.wav : CP.red[i-1].out } },
     { binding:1, resource:{ buffer:L.out } }]}));
 
+  {                                       // seed the corner radii; geomFrac keeps them
+    const nG = (S.Nz + 1) * (S.Nr + 1), g = new Float32Array(nG * 4);
+    for (let ir = 0; ir <= S.Nr; ir++) for (let iz = 0; iz <= S.Nz; iz++)
+      g[(ir * (S.Nz + 1) + iz) * 4 + 3] = S.RN[iz * (S.Nr + 1) + ir];
+    dev.queue.writeBuffer(B.cut, 0, g);
+  }
+
   CP.stageMax   = dev.createBuffer({ size:8, usage:GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   CP.probeBytes = (S.Nr * 8 + S.Nz) * 4;
   CP.stageProbe = dev.createBuffer({ size:Math.max(32, CP.probeBytes),
@@ -2162,7 +2381,7 @@ function compAlloc(){
   CP.mapBusy = false;
   CP.gen = (CP.gen || 0) + 1;
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / (S.hrMin || S.dr));
   CP.machMax = 0;
 }
 
@@ -2190,7 +2409,7 @@ function compReset(){
   pass.end();
   dev.queue.submit([enc.finish()]);
   CP.idx = 0;
-  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / S.dr);
+  CP.waveMax = Math.sqrt(P.gammaE * P.RgasE * P.Tc) * (1 / S.dz + 1 / (S.hrMin || S.dr));
   CP.machMax = 0;
 }
 
@@ -3793,6 +4012,25 @@ vAdd('Bell contour: throat radius is the minimum', 'fast', async () => {
   return { got:d.rt, want:Math.min(P.throatR, P.chamR - 0.5), lo:-0.01, hi:0.01, unit:'mm' };
 });
 
+vAdd('Mapped grid stays monotone and non-degenerate', 'fast', async () => {
+  let worst = 1e9;
+  for (const n of ['Sea-level booster', 'Aerospike', 'XRS-2200', 'Vacuum upper stage', 'F-1']){
+    vSetPreset(n);
+    for (let iz = 0; iz <= S.Nz; iz++){ const b = iz * (S.Nr + 1);
+      for (let ir = 0; ir < S.Nr; ir++)
+        worst = Math.min(worst, S.RN[b + ir + 1] - S.RN[b + ir]); }
+  }
+  return { got:worst, want:0, lo:1e-6, hi:1e9, unit:'mm smallest cell' };
+});
+vAdd('Body fitting resolves the throat better than a uniform grid', 'fast', async () => {
+  let worst = 1e9;
+  for (const n of ['Sea-level booster', 'Aerospike', 'XRS-2200']){
+    vSetPreset(n);
+    worst = Math.min(worst, S.dr / throatSpacing());
+  }
+  return { got:worst, want:1, lo:0.5, hi:1e9, unit:'x finer' };
+});
+
 /* ---- one-dimensional identities ---- */
 vAdd('Area-Mach inverts to itself over Mach 1 to 6', 'fast', async () => {
   let worst = 0;
@@ -3815,13 +4053,13 @@ vAdd('Choked mass flow equals rho* a* A*', 'fast', async () => {
 /* ---- solver, steady state ---- */
 vAdd('Reference bell: mass flow against ideal', 'slow', async () => {
   vSetPreset('Sea-level booster');
-  if (!await vRunTo(2.0, 90000)) return { got:NaN, want:91, lo:-6, hi:6, unit:'%' };
+  if (!await vRunTo(2.0, 90000)) return { got:NaN, want:95, lo:-6, hi:6, unit:'%' };
   const d = derived(), m = S.meas;
-  return { got:100 * m.mdot / d.mdot, want:91, lo:-6, hi:6, unit:'%' };
+  return { got:100 * m.mdot / d.mdot, want:95, lo:-6, hi:6, unit:'%' };
 });
 vAdd('Reference bell: on-axis exhaust velocity', 'slow', async () => {
   const d = derived(), m = S.meas;      // reuses the state the previous check left
-  return { got:m.axis, want:2630, lo:-120, hi:120, unit:'m/s' };
+  return { got:m.axis, want:2690, lo:-120, hi:120, unit:'m/s' };
 });
 vAdd('Flat nose at Mach 2: drag coefficient', 'slow', async () => {
   vSetPreset('Supersonic flight', { noseType:0 });
@@ -3837,13 +4075,13 @@ vAdd('Uniform ambient integrates to zero drag', 'slow', async () => {
 });
 vAdd('Aerospike: mass flow against ideal', 'slow', async () => {
   vSetPreset('Aerospike');
-  if (!await vRunTo(2.2, 180000)) return { got:NaN, want:76, lo:-10, hi:10, unit:'%' };
+  if (!await vRunTo(2.2, 120000)) return { got:NaN, want:84, lo:-9, hi:9, unit:'%' };
   const d = derived(), m = S.meas;
-  return { got:100 * m.mdot / d.mdot, want:76, lo:-10, hi:10, unit:'%' };
+  return { got:100 * m.mdot / d.mdot, want:84, lo:-9, hi:9, unit:'%' };
 });
 vAdd('Aerospike: exhaust velocity against ideal', 'slow', async () => {
   const d = derived(), m = S.meas;
-  return { got:100 * (m.thrust / m.mdot) / (d.thrust / d.mdot), want:93, lo:-8, hi:8, unit:'%' };
+  return { got:100 * (m.thrust / m.mdot) / (d.thrust / d.mdot), want:97, lo:-8, hi:8, unit:'%' };
 });
 
 async function validate(tier){

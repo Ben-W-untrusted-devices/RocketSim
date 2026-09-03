@@ -117,6 +117,51 @@ No change to the cases that were already converged: the reference bell reads 90 
 flow against 91 % before, on-axis exhaust velocity 2636 m/s against 2631, and flat-nose drag at
 Mach 2 is 257 N (C_D 1.48) against 261 N (C_D 1.50).
 
+## Body-fitted nozzle grid
+
+A uniform grid has to resolve a throat a millimetre across inside a domain a metre long, and
+pays for that spacing everywhere. The radial coordinate is now remapped per axial station so
+that a fixed share of the radial cells lies between the two walls of the nozzle passage, and
+grid lines run along the walls instead of cutting across them. Away from the nozzle the mapping
+relaxes to the uniform grid, so the plume and the external flow are unaffected.
+
+The mapping is stored on cell corners, which keeps neighbouring cells sharing a face exactly.
+Axial faces stay perpendicular to the axis and only their area changes; radial faces follow the
+mapping and carry a tilted normal, so the Riemann problem there is solved in the face frame and
+the flux rotated back. Cell volumes come from the revolved quadrilateral. The wall-pressure and
+hoop terms are written so that a uniform pressure produces exactly zero net force, which holds
+on the mapped grid because the face normals of a closed contour sum to zero and their radial
+components sum to the planar area.
+
+Same configurations, body fitting off and on:
+
+| case | grid | cells | cells across throat | wall time | mdot vs ideal | c vs ideal |
+|---|---|---|---|---|---|---|
+| bell, uniform | 450 x 112 | 50 k | 12.8 | 8 s | 89.8 % | 93 % |
+| bell, fitted | 450 x 112 | 50 k | 30.0 | 11 s | **94.7 %** | 93 % |
+| aerospike, uniform | 1020 x 256 | 261 k | 15.2 | ~180 s | 73.6 % | 96 % |
+| aerospike, fitted | 510 x 128 | 65 k | 19.2 | 29 s | **84.0 %** | **98.2 %** |
+| aerospike, uniform, matched cost | 510 x 128 | 65 k | 7.6 | 29 s | 58.4 % | 89.1 % |
+
+The bell gains five points of discharge on the same cell count for 1.4 times the run time, the
+extra cost being the smaller timestep the finer throat cells impose. The aerospike is the larger
+result: better than the uniform grid gave at four times the cell count and six times the run
+time, and at matched cost the comparison is 84.0 % against 58.4 %.
+
+Refinement still works through the throat rather than only the plume, because the share given to
+the passage has a floor rather than being a fixed cell count: at radial resolutions of 112, 128,
+192 and 256 the plug nozzle gets 17.9, 19.2, 22.1 and 29.4 cells across its annular gap.
+
+The case this was built for is the XRS-2200 preset, where the annular gap is a small fraction of
+the throat radius. A uniform grid puts 0.7 cells across it at 128 radial cells and 1.0 at 192;
+the mapping gives 4.9 and 8.0 at the same cost. That is still short of the 25 the discharge
+needs, and the geometry there is extreme, with the throat inclined 97 degrees, but it moves the
+case from unrepresentable to marginal.
+
+What the mapping does not change: flat-nose drag at Mach 2 reads 1.48 either way, and a uniform
+ambient still integrates to zero net force, so free-stream preservation survives the tilted
+faces.
+
 ## Aerospike
 
 The plug nozzle is a method-of-characteristics contour whose annular throat area is set equal to

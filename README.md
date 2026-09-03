@@ -63,7 +63,7 @@ rather than an exponent. Narrower controls stay as sliders, since dragging them 
 | Atmosphere | six worlds as buttons; ambient pressure (log, 10 Pa to 10 MPa), temperature, flight speed, surface gravity, γ and R directly |
 | Vehicle & flight | acceleration on/off, level / vertical / gravity-turn path, pitch-over speed and angle, dry and propellant mass, trajectory fast-forward |
 | Fluid | viscosity, Smagorinsky constant, tracer fade |
-| Domain & solver | plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
+| Domain & solver | body-fitted nozzle grid, plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
 | Measurement | position of the measurement plane relative to the exit |
 
 ---
@@ -88,6 +88,19 @@ expand outside through a Prandtl-Meyer fan, overshoots, and recompresses into a 
 diamonds.
 
 ![Under-expanded nozzle with a train of shock diamonds](docs/img/underexpanded.png)
+
+### Body-fitted nozzle grid
+
+On by default. The radial coordinate is remapped per axial station so that a fixed share of the
+radial cells falls between the two walls of the nozzle passage, with grid lines running along
+the walls rather than across them. Outside the nozzle it relaxes back to the uniform grid.
+
+A uniform grid has to resolve a throat a millimetre across inside a domain a metre long, and
+pays for that spacing everywhere; the mapping decouples the two. The reference bell goes from
+12.8 to 30 cells across the throat at the same cell count, and its measured mass flow from
+89.8 % of ideal to 94.7 %. The plug nozzle reaches 84.0 % on a grid four times smaller and six
+times faster than the uniform one that gave 73.6 %. The switch is in **Domain & solver** if you
+want to compare.
 
 ### Aerospike
 
