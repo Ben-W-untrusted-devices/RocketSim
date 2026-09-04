@@ -302,6 +302,36 @@ at high expansion ratios, where separation moves far enough up the bell to be de
 annular gap at those ratios is a small fraction of the throat radius and is not resolvable on
 this grid.
 
+### The XRS-2200 as an annular engine
+
+The real XRS-2200 is linear: twenty thruster cells along a ramp, about 2 m in every direction.
+This solver is axisymmetric, so the preset is the annular equivalent, which is a substitution
+worth being explicit about. Chamber pressure, expansion ratio and total throat area are the
+published ones, and the throat area is derived from the published mass flow rather than fitted:
+274 kg/s against 273. What does not carry over is the shape. Spreading the same throat area
+around a circumference instead of along a ramp puts the throat at 188 mm equivalent radius and
+the lip at 1432 mm, so the annular version is 2.9 m across where the real engine was about 2.2 m
+wide. The spike is truncated to 25 %, as plug nozzles are, giving a built length of 1.62 m and
+an engine 2.31 m long against a published 2.01 m.
+
+Two faults were found in this case that nothing else had exposed.
+
+The reported half-angle came from the diverging length, a parameter a plug nozzle does not use,
+and read 89 degrees where the throat flow angle is 78. The panel now reports the flow angle,
+which is what actually sets the contour.
+
+More seriously, the engine did not flow at all. The chamber sat pinned at 58 bar while nothing
+left the injector, and every one-dimensional figure in the panel looked healthy because none of
+them come from the solver. The cause was the body-fitted mapping: it ramped in over the chamber
+length, which for a metre-scale engine sweeps grid lines radially so fast that axial faces close
+altogether and the duct is sealed. It now ramps over the forebody, where the walls are at
+constant radius and the sweep is gentle, and the duct is open with full apertures from the
+injector to the throat.
+
+That failure is now a check. Every hardware preset is run until its mass flow settles and has to
+be flowing: V-2 92 %, F-1 72 %, RS-25 104 %, XRS-2200 71 %, Traveler IV 90 % of choked. A sealed
+duct reads exactly zero and nothing else in the suite would have caught it.
+
 ### When a plug nozzle is worth it
 
 A plug nozzle only earns anything where a bell would be forced to separate, so the question is
