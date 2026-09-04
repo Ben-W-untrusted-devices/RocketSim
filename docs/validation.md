@@ -419,6 +419,52 @@ area alone. The measured block shows the usual pattern: mass flow and thrust eac
 At 23 cells across the throat radius but only 12 axially, this nozzle is less well resolved
 along the axis than the reference configuration, and the deficit is correspondingly larger.
 
+### Flying without a fast-forward
+
+Coupling the trajectory to flow time forces a choice between a ratio large enough to reach
+trajectory timescales and one small enough that the flow keeps up with the conditions it is
+being read at. No setting does both, so the coupling is the problem rather than the ratio, and
+bounding it and reporting the residual error was treating a symptom.
+
+Thrust and drag are smooth functions of very few variables. For a choked nozzle neither mass
+flow nor exhaust velocity depends on ambient pressure, so thrust is a straight line in it,
+F = F_vac - p_a*A_e, bending only where the nozzle separates; drag is a dynamic pressure times a
+coefficient that depends on Mach number. Five steady solutions across ambient pressure and eight
+across Mach therefore pin both down, and the trajectory is then integrated against those at
+whatever step the equations of motion want. There is no coupling error left in it at all.
+
+Each steady point runs until the exit-plane thrust stops moving rather than to a fixed flow
+time, gated on the exhaust having reached the measurement plane at all: a thrust of exactly
+zero, which is what the plane reads before the flow arrives, is otherwise perfectly steady and
+passes immediately. A metre-scale engine takes an order of magnitude longer to fill than a
+desk-scale one, and a fixed two milliseconds silently produced decks measured on a flow that had
+not started.
+
+| | deck-flown | published |
+|---|---|---|
+| Traveler IV apogee | 93.9 km | 103.6 +/- 5.0 km |
+| Traveler IV, time to apogee | 147 s | 151 s |
+| Traveler IV, peak speed | 1390 m/s | 1515 m/s |
+| V-2 mass flow | 113 kg/s | 123 kg/s |
+| V-2 burn time | 71 s | 65 s |
+| V-2 sea-level Isp, measured | 202 s | 203 s |
+
+Traveler IV comes out 9 % low on apogee where the fast-forward run was 14 % high, and its
+masses are inferred rather than published, so erring low is the expected direction.
+
+The V-2 comes out at 184 km against the 109 to 134 km its vertical sounding flights reached.
+That gap is not the integrator, which is exact for its inputs, but the masses: sources do not
+agree with each other. Tank capacities total 9,726 kg while 123 kg/s over the published 65 s
+burn is 8,000 kg, and empty mass is quoted anywhere between 3,165 and 4,008 kg depending on
+what is counted. Apogee is roughly as sensitive to the mass ratio as to everything else
+combined; reproducing 121 km needs a burnout mass near 5,400 kg rather than the 4,040 used here.
+The model is reported as it stands rather than tuned to the answer.
+
+Chamber size turned out to matter more than expected. The V-2 preset originally had a chamber
+only 1.5 times the throat area, which leaves the flow already fast at the injector face and cost
+16 points of mass flow. At the real contraction ratio of 5.4 the measured sea-level Isp is 202 s
+against a published 203. The RS-25 preset had the same fault and was corrected to its real 2.95.
+
 ### V-2 trajectory
 
 The sounding-rocket configuration, fired vertically: 540 kg of instruments in place of the

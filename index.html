@@ -846,7 +846,7 @@ const PRESETS = [
  { n:'V-2 (A-4)', d:'1942, LOX/ethanol, 15 bar, ε 3.3, vertical sounding flight',
    p:{ gammaE:1.22, RgasE:354, Tc:2973, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0, gSurf:9.81,
-       pcBar:15, throatR:203, nozExitR:370, chamR:250, chamLen:600, convLen:400, divLen:620,
+       pcBar:15, throatR:203, nozExitR:370, chamR:470, chamLen:900, convLen:400, divLen:620,
        nozShape:1, noseType:2, noseLen:1800, foreLen:2500, wallT:20,
        res:112, rDomain:2.5, downrange:3000,
        accelerate:1, flightMode:1, dryMassLog:LOG10(4040), propMassLog:LOG10(8000), ffLog:3 } },
@@ -859,7 +859,7 @@ const PRESETS = [
  { n:'RS-25', d:'Shuttle main engine, hydrolox, 206 bar, ε 69',
    p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0,
-       pcBar:206, throatR:137, nozExitR:1138, chamR:170, chamLen:450, convLen:260, divLen:2900,
+       pcBar:206, throatR:137, nozExitR:1138, chamR:236, chamLen:450, convLen:260, divLen:2900,
        nozShape:1, noseType:2, noseLen:1200, foreLen:1500, wallT:15,
        res:112, rDomain:2.0, downrange:6000 } },
  { n:'XRS-2200', d:'X-33 aerospike, hydrolox, 58 bar, ε 58. Annular here, and past what this ' +
@@ -3788,6 +3788,55 @@ for (const g of CONTROLS){
   host.appendChild(d);
 }
 
+/* ---- flight decks panel ---- */
+{
+  const vf = [...host.querySelectorAll('details')]
+    .find(d => d.querySelector('summary').textContent.trim().startsWith('Vehicle'));
+  if (vf){
+    const box = document.createElement('div');
+    box.innerHTML = `<div class="ctl"><div class="lab"><span>Flown trajectory</span></div>
+      <div class="hint">Coupling the trajectory to flow time forces a choice between a
+      fast-forward big enough to reach trajectory timescales and one small enough that the flow
+      keeps up. There is no setting that does both. This measures thrust against ambient
+      pressure and drag against Mach from steady solutions, then integrates the trajectory
+      against those, which has no coupling error in it at all. Takes a couple of minutes; the
+      result is exact for the vehicle as drawn.</div>
+      <div class="btnrow"><button id="deckBtn">Measure and fly</button>
+        <button id="deckFlyBtn">Fly again</button></div>
+      <div class="hint" id="deckOut"></div></div>`;
+    vf.querySelector('.body').appendChild(box);
+    const out = box.querySelector('#deckOut');
+    const show = r => {
+      if (!r){ out.textContent = 'No decks yet.'; return; }
+      const b = r.burnout;
+      if (!r.liftedOff){ out.textContent = r.note; return; }
+      out.innerHTML =
+        `<b>apogee ${fmt(r.apogee_km,1)} km</b> at T+${fmt(r.tApogee,0)} s, ` +
+        `peak speed ${fmt(r.vMax,0)} m/s` +
+        (b ? `, burnout T+${fmt(b[0],1)} s at ${fmt(b[1]/1000,1)} km and ${fmt(b[2],0)} m/s` : '') +
+        `<br>decks: ${DECK.note}. No fast-forward is involved.`;
+    };
+    const fly = () => {
+      const r = flyDeck();
+      if (r){ deckToSeries(r); drawPlot(); }
+      show(r);
+    };
+    box.querySelector('#deckBtn').addEventListener('click', async () => {
+      const bs = box.querySelectorAll('button');
+      for (const b of bs) b.disabled = true;
+      const ok = await buildDecks(m => { out.textContent = 'Measuring: ' + m + '...'; });
+      for (const b of bs) b.disabled = false;
+      if (!ok){ out.textContent = 'Could not build the decks: ' + DECK.note; return; }
+      fly();
+    });
+    box.querySelector('#deckFlyBtn').addEventListener('click', () => {
+      if (deckStale()){ out.textContent = 'The decks are for a different configuration; ' +
+        'measure again.'; return; }
+      fly();
+    });
+  }
+}
+
 /* ---- validation panel ---- */
 {
   const d = document.createElement('details');
@@ -4327,6 +4376,207 @@ function vMinPassage(){
       if (a < best) best = a;
     }
   return best / At;
+}
+
+/* ========================== flight decks ==========================
+   Coupling the trajectory to flow time forces a choice between a fast-forward large enough to
+   reach trajectory timescales and one small enough that the flow keeps up with the conditions
+   it is being read at. There is no setting that does both, so the coupling itself is the
+   problem rather than the ratio.
+
+   The way out is the one trajectory codes have always used: characterise the vehicle first,
+   then integrate against the characterisation. Thrust and drag are smooth functions of very
+   few variables. For a choked nozzle mass flow and exhaust velocity do not depend on ambient
+   pressure at all, so thrust is a straight line in it, F = F_vac - p_a * A_e, bending only
+   where the nozzle separates. Drag is a dynamic pressure times a coefficient that depends on
+   Mach number. So a handful of steady solutions pins both down, and the trajectory can then be
+   integrated at whatever step the equations of motion need, with no coupling error left. */
+
+const DECK = { built:false, sig:null, pa:[], F:[], mdot:[], mach:[], cd:[], Aref:0, note:'' };
+
+function deckSignature(){
+  const keys = ['gammaE','RgasE','Tc','pcBar','throatR','nozExitR','chamR','chamLen','convLen',
+                'divLen','nozShape','spikeTrunc','noseType','noseLen','foreLen','wallT',
+                'gammaA','RgasALog','tAmb','res','rDomain','zAspect'];
+  return keys.map(k => P[k]).join(',');
+}
+const deckStale = () => !DECK.built || DECK.sig !== deckSignature();
+
+/* Linear interpolation on a sampled curve, holding the end values outside the range. */
+function interp(xs, ys, x){
+  if (x <= xs[0]) return ys[0];
+  const n = xs.length;
+  if (x >= xs[n-1]) return ys[n-1];
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1){ const m = (lo + hi) >> 1; if (xs[m] <= x) lo = m; else hi = m; }
+  const t = (x - xs[lo]) / (xs[hi] - xs[lo]);
+  return ys[lo] + (ys[hi] - ys[lo]) * t;
+}
+
+/* Run until the exit-plane thrust stops moving, rather than to a fixed flow time. A large
+   nozzle takes an order of magnitude longer to fill than a small one, and a fixed 2 ms silently
+   produced decks measured on a flow that had not started yet. */
+async function vRunToSteady(budgetMs, tol){
+  const t0 = performance.now();
+  S.running = false;
+  const D0 = derived();
+  /* Two gates before stability is even considered. A thrust of exactly zero, which is what the
+     measurement plane reads before the exhaust has reached it, is perfectly steady and would
+     otherwise pass at once; and the domain has to be flushed at least twice, which takes ten
+     times longer for a metre-scale engine than for a desk-scale one. */
+  const tMin = Math.max(1.0, 2.0 * S.Lz / Math.max(D0.ve, 1));      // mm / (m/s) is ms
+  const mGate = 0.2 * D0.mdot;
+  const chunk = Math.max(0.25, tMin / 20);
+  let last = null, stable = 0;
+  while (performance.now() - t0 < budgetMs && !S.diverged){
+    const target = S.t + chunk;
+    while (S.t < target && !S.diverged){
+      if (performance.now() - t0 > budgetMs) return false;
+      compSteps(64);
+      await WG.dev.queue.onSubmittedWorkDone();
+      await new Promise(r => setTimeout(r, 0));
+    }
+    const m = S.meas;
+    if (!m || !Number.isFinite(m.thrust)) continue;
+    if (S.t < tMin || !(m.mdot > mGate)){ last = m.thrust; stable = 0; continue; }
+    const rel = last === null ? 1 : Math.abs(m.thrust - last) / Math.max(Math.abs(last), 1);
+    last = m.thrust;
+    stable = rel < (tol || 0.01) ? stable + 1 : 0;
+    if (stable >= 3) return true;                     // three quiet chunks in a row
+  }
+  return false;
+}
+
+async function buildDecks(report){
+  const saved = JSON.stringify(P);
+  const say = m => { if (report) report(m); };
+  const p0 = Math.pow(10, P.pAmbLog) * 1000;        // launch ambient, Pa
+  const restore = () => { Object.assign(P, JSON.parse(saved)); syncSliders();
+                          buildGrid(); pendingRebuild = false; };
+  try {
+    DECK.pa = []; DECK.F = []; DECK.mdot = []; DECK.mach = []; DECK.cd = [];
+    /* Thrust against ambient pressure, still air. Five points from the launch value down to
+       near vacuum is enough for a line plus whatever separation does to it. */
+    const pas = [p0, p0 * 0.4, p0 * 0.15, p0 * 0.05, Math.max(p0 * 0.01, 10)];
+    for (let i = 0; i < pas.length; i++){
+      say(`thrust ${i+1} of ${pas.length}`);
+      Object.assign(P, JSON.parse(saved));
+      P.accelerate = 0; P.vAmb = 0; P.pAmbLog = Math.log10(pas[i] / 1000);
+      syncSliders(); buildGrid(); pendingRebuild = false;
+      if (!await vRunToSteady(120000)) throw new Error('thrust point ' + (i+1) + ' did not settle');
+      DECK.pa.push(pas[i]); DECK.F.push(S.meas.thrust); DECK.mdot.push(S.meas.mdot);
+    }
+    /* Drag coefficient against Mach, at the launch ambient with the engine running, since the
+       base pressure the plume sets is part of the axial force. */
+    const aRef = env().aA;
+    const machs = [0.2, 0.6, 0.9, 1.3, 2.0, 3.0, 4.0, 5.0];
+    for (let i = 0; i < machs.length; i++){
+      say(`drag ${i+1} of ${machs.length}`);
+      Object.assign(P, JSON.parse(saved));
+      P.accelerate = 0; P.vAmb = machs[i] * aRef;
+      syncSliders(); buildGrid(); pendingRebuild = false;
+      if (!await vRunToSteady(120000)) throw new Error('drag point ' + (i+1) + ' did not settle');
+      const E = env(), A = Math.PI * GEO.bodyR * GEO.bodyR * 1e-6;
+      const q = 0.5 * E.rhoA * E.vInf * E.vInf;
+      DECK.mach.push(machs[i]);
+      DECK.cd.push(q > 1e-9 ? S.meas.drag / (q * A) : 0);
+      DECK.Aref = A;
+    }
+    restore();
+    DECK.sig = deckSignature();
+    DECK.built = true;
+    DECK.note = `${pas.length} thrust points, ${machs.length} drag points`;
+    return true;
+  } catch (e){
+    restore();
+    DECK.built = false;
+    DECK.note = String(e && e.message || e);
+    return false;
+  }
+}
+
+/* Point mass over a flat planet, integrated with RK4 against the decks. Thrust comes from the
+   ambient-pressure curve, drag from the Mach curve and the local dynamic pressure, and mass
+   from the mass flow the same solutions measured. Nothing here is tied to flow time, so the
+   step is whatever the equations of motion want. */
+function flyDeck(maxSeconds){
+  if (!DECK.built) return null;
+  const g = P.gSurf, H = scaleHeight();
+  const E0 = env(), pa0 = E0.pa, rho0 = E0.rhoA, T0 = P.tAmb;
+  const Rg = E0.Rg, ga = E0.g;
+  const mdot = DECK.mdot.reduce((a,b) => a+b, 0) / DECK.mdot.length;
+  const mDry = dryMass(), mProp = propMass();
+  const paAt = h => pa0 * Math.exp(-Math.max(h, 0) / H);
+  const rhoAt = h => rho0 * Math.exp(-Math.max(h, 0) / H);
+  const aSnd = Math.sqrt(ga * Rg * T0);
+  const forces = (h, v, burning) => {
+    const pa = paAt(h);
+    const F = burning ? Math.max(interp(DECK.pa.slice().reverse(),
+                                        DECK.F.slice().reverse(), pa), 0) : 0;
+    const cd = interp(DECK.mach, DECK.cd, v / aSnd);
+    const D = 0.5 * rhoAt(h) * v * v * cd * DECK.Aref;
+    return { F, D };
+  };
+  const vertical = climbing(), turn = turning();
+  let t = 0, v = P.vAmb, h = 0, x = 0, fpa = Math.PI / 2, prop = mProp, kicked = false;
+  const out = [];
+  const dt = 0.02;
+  const lim = maxSeconds || 3600;
+  const recEvery = 0.1;
+  let nextRec = 0, hMax = -Infinity, tMax = 0, vPeak = 0, burnT = -1;
+  let apogee = false, impact = false, liftedOff = false;
+  while (t < lim){
+    const m = mDry + prop;
+    const burning = prop > 0;
+    if (turn && !kicked && v >= P.kickSpeed){ fpa = (90 - P.kickAngle) * Math.PI / 180; kicked = true; }
+    const sinF = vertical ? Math.sin(fpa) : 0;
+    const { F, D } = forces(h, v, burning);
+    const a = (F - D) / m - (vertical ? g * sinF : 0);
+    // integrate finely, record coarsely: a few thousand rows is plenty to plot or export
+    if (t >= nextRec){ out.push([t, h, v, F, D, m, fpa * 180 / Math.PI, x, prop]);
+                       nextRec += recEvery; }
+    if (h > hMax){ hMax = h; tMax = t; }
+    if (v > vPeak) vPeak = v;
+    if (burnT < 0 && prop <= 0) burnT = out.length ? out.length - 1 : 0;
+    const vNext = v + a * dt;
+    if (vertical){
+      h += 0.5 * (v + vNext) * Math.sin(fpa) * dt;
+      x += 0.5 * (v + vNext) * Math.cos(fpa) * dt;
+    }
+    if (turn && vNext > 1) fpa = Math.max(-Math.PI/2, fpa - (g * Math.cos(fpa) / vNext) * dt);
+    if (burning) prop = Math.max(0, prop - mdot * dt);
+    if (vertical && !turn && v > 1 && vNext <= 0){ apogee = true; v = 0; break; }
+    v = Math.max(0, vNext);
+    if (v > 1) liftedOff = true;
+    if (vertical && liftedOff && h <= 0 && t > 1){ impact = true; break; }
+    if (!liftedOff && t > 5) break;          // never left the pad
+
+    t += dt;
+  }
+  return { rows:out, apogee, impact, liftedOff,
+           apogee_km: hMax / 1000, tApogee: tMax, vMax: vPeak,
+           burnout: burnT >= 0 ? out[burnT] : null,
+           note: liftedOff ? '' : 'thrust never exceeded weight, so it did not leave the pad' };
+}
+
+/* Put a deck-flown trajectory into the recorded series so the plot and the CSV show it. The
+   flow-field columns have no meaning here and are left empty. */
+function deckToSeries(r){
+  S.series.length = 0;
+  const idx = k => SERIES.findIndex(x => x.k === k) + 1;
+  for (const [t, h, v, F, D, m, fpa, x, prop] of r.rows){
+    const row = new Array(SERIES.length + 1).fill(NaN);
+    row[0] = t * 1000;                       // the plot's x axis is milliseconds
+    row[idx('thrust')] = F; row[idx('drag')] = D; row[idx('net')] = F - D;
+    row[idx('flightT')] = t; row[idx('vFlight')] = v;
+    row[idx('mach')] = v / Math.sqrt(env().g * env().Rg * P.tAmb);
+    row[idx('accel')] = ((F - D) / m - (climbing() ? P.gSurf * Math.sin(fpa*Math.PI/180) : 0)) / G0;
+    row[idx('alt')] = h / 1000; row[idx('range')] = x / 1000;
+    row[idx('fpa')] = fpa; row[idx('mass')] = m; row[idx('propLeft')] = prop;
+    S.series.push(row);
+  }
+  SERIES_ON.clear(); ['alt','vFlight','thrust','drag'].forEach(k => SERIES_ON.add(k));
+  buildSeriesPicker();
 }
 
 const CHECKS = [];
