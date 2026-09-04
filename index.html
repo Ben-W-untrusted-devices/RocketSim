@@ -886,6 +886,13 @@ const PRESETS = [
        pcBar:58, throatR:188, nozExitR:1432, chamLen:300, convLen:400,
        nozShape:2, spikeTrunc:25, noseType:2, noseLen:1500, foreLen:2000, wallT:25,
        res:192, rDomain:1.5, downrange:6000 } },
+ { n:'J-2T-250K', d:'1972 toroidal aerospike, hydrolox, ε 80. Genuinely annular, so the ' +
+      'shape this solver assumes is the shape the engine had',
+   p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
+       tAmb:288, vAmb:0,
+       pcBar:53, throatR:191, nozExitR:1710, chamLen:400, convLen:500,
+       nozShape:2, spikeTrunc:25, noseType:2, noseLen:1800, foreLen:2200, wallT:25,
+       res:192, rDomain:1.5, downrange:7000 } },
  { n:'Traveler IV', d:'USC RPL 2019, first student rocket past the Karman line',
    p:{ gammaE:1.18, RgasE:308, Tc:3200, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0, gSurf:9.81,
@@ -903,6 +910,11 @@ const HARDWARE = {
   'F-1':       { ispSL:[263, -2, 18], ispVac:[304, -2, 20], mdot:[2577, -8, 8] },
   'RS-25':     { ispSL:[366, -2, 16], ispVac:[452, -2, 12], mdot:[515, -8, 8] },
   'XRS-2200':  { ispVac:[439, -4, 22] },
+  /* Sea-level Isp is left out for both aerospikes on purpose. One-dimensional theory has no
+     way to represent a plume boundary that adjusts, so it returns the badly over-expanded
+     bell figure; the gap between that and the real engine is the compensation itself and is
+     reported in the comparison section rather than checked as an error. */
+  'J-2T-250K': { ispVac:[441, -4, 22] },
   'Traveler IV': { }
 };
 
