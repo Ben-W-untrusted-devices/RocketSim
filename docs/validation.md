@@ -302,6 +302,43 @@ at high expansion ratios, where separation moves far enough up the bell to be de
 annular gap at those ratios is a small fraction of the throat radius and is not resolvable on
 this grid.
 
+### Why the annular throat is so thin
+
+The throat of a plug nozzle is an annulus of area pi*throat^2 wrapped around the centrebody, so
+its width is set by the radius it has to go round. Working that through, the gap as a fraction
+of the lip radius is about 1/(2*epsilon), and that ratio is scale-invariant: making the engine
+bigger or smaller does not change it. Measured against the built geometry:
+
+| epsilon | gap / lip radius | 1/(2*epsilon) |
+|---|---|---|
+| 3.4 | 13.2 % | 14.5 % |
+| 8.2 | 5.6 % | 6.1 % |
+| 18.4 | 2.6 % | 2.7 % |
+| 32.7 | 1.50 % | 1.53 % |
+| 58.4 | 0.85 % | 0.86 % |
+| 100 | 0.50 % | 0.50 % |
+
+For the XRS-2200 preset that is a 12.26 mm slot around 9.0 m of circumference, an aspect ratio
+of 739 to 1. The arithmetic is exact rather than approximate: the annulus between the centrebody
+at 1435.8 mm and a gap of 12.256 mm has an area of 111,036 mm squared against a design throat
+area of 111,036, and the minimum passage over all spanning surfaces is 1.0002 times design.
+
+So the picture is right and the premise is the extreme part. A continuous annular slot of that
+aspect ratio is not something anyone would build, and that is exactly why high-expansion plug
+nozzles are made as a ring of separate thruster cells: the XRS-2200 had twenty. An axisymmetric
+solver cannot represent cells, so the preset is the annular equivalent and says so.
+
+### Nothing is silently overridden
+
+The XRS-2200 preset asked for a 500 mm chamber and the geometry used 1484 without saying
+anything, because for a plug nozzle the chamber radius is not free: the inner wall is fixed by
+the spike root and the turn, and the outer follows from the area the chamber needs. The
+contraction ratio is now an explicit control, the chamber radius is derived from it and
+reported as derived, and presets no longer declare a value the model is going to replace.
+
+That class of fault is now a check. Every value every preset declares has to survive into the
+model to within the control's own step, and the geometry has to use the radii it was given.
+
 ### The XRS-2200 as an annular engine
 
 The real XRS-2200 is linear: twenty thruster cells along a ramp, about 2 m in every direction.

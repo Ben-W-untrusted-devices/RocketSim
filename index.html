@@ -195,6 +195,12 @@ const CONTROLS = [
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
      hint:'Chamber conditions ramp from ambient to full over this interval, smoothstep in ' +
           'time. Shorter ramps produce a stronger starting shock.' },
+   { k:'contractRatio', t:'Chamber contraction ratio', min:1.2, max:15, step:0.1, v:4,
+     hint:'Plug nozzles only. The chamber is an annulus around the centrebody, so its radius ' +
+          'is not free: the inner wall is fixed by the spike root and the turn, and the outer ' +
+          'follows from the area the chamber needs. This sets that area as a multiple of the ' +
+          'throat area, and the resulting radius is reported in the panel. Conical and bell ' +
+          'nozzles use the chamber radius below directly.' },
    { k:'chamR',   t:'Chamber radius',        min:5,   max:1500,step:0.5, v:25,   unit:'mm', rebuild:true },
    { k:'chamLen', t:'Chamber length',        min:10,  max:4000,step:1,   v:50,   unit:'mm', rebuild:true,
      hint:'Gas dynamics only. No injector elements, no combustion, no characteristic length; ' +
@@ -460,7 +466,12 @@ function computeGeometry(){
   /* The centrebody runs at a constant radius from the injector face to the start of the turn,
      so the whole contraction is carried by the cowl and the inner wall has no curvature to
      separate off. The chamber radius then follows from the contraction ratio. */
-  const contract   = 4 * Math.PI * throatR * throatR;              // chamber annulus area
+  /* A plug nozzle's chamber wraps around its centrebody, so its radius is not a free
+     parameter: the inner wall is fixed by the spike root and the turn, and the outer follows
+     from the area the chamber needs. Taking it from the slider as well would either be
+     ignored or give a chamber that does not enclose its own centrebody, so it is derived and
+     reported as derived. Bells use the slider directly. */
+  const contract   = P.contractRatio * Math.PI * throatR * throatR;
   /* The turn has to fit inside the convergent section with room left over for the
      contraction, or the cowl would have to widen on its way to the throat. */
   const turnGap    = SPK ? SPK.h : 0;
@@ -470,7 +481,7 @@ function computeGeometry(){
     : 0;
   const plugChamR  = SPK ? spikeR0 + turnR * (1 - Math.cos(SPK.delta)) : 0;
   const chamR      = SPK
-    ? Math.max(P.chamR, Math.sqrt(plugChamR * plugChamR + contract / Math.PI))
+    ? Math.sqrt(plugChamR * plugChamR + contract / Math.PI)
     : P.chamR;
 
   const bodyR    = Math.max(chamR, nozExitR) + P.wallT;
@@ -780,7 +791,9 @@ function derived(){
            spike:isSpike(), spikeR0:GEO.spikeR0 || 0, spikeBaseR:GEO.spikeBaseR || 0,
            spikeBuilt:GEO.spikeBuilt || 0, spikeNue:GEO.spikeNue || 0,
            spikeGap:GEO.turnGap || 0, spikeDelta:GEO.spikeDelta || 0,
-           spikeEpsI:GEO.spikeEpsI || 1, spikeMouth:GEO.spikeMouth || 0 };
+           spikeEpsI:GEO.spikeEpsI || 1, spikeMouth:GEO.spikeMouth || 0,
+           chamRUsed:GEO.chamR || 0, plugChamR:GEO.plugChamR || 0,
+           spikeFull:GEO.spikeFull || 0 };
 }
 
 
@@ -837,7 +850,7 @@ const PRESETS = [
  { n:'Aerospike', d:'plug nozzle, ε 3.45, matched at sea level',
    p:{ gammaE:1.24, RgasE:375, Tc:3570, gammaA:1.40, RgasALog:2.458, pAmbLog:2.006, tAmb:288,
        gSurf:9.81, vAmb:0,
-       pcBar:20, throatR:14, nozExitR:26, chamR:38, convLen:20, nozShape:2, spikeTrunc:100,
+       pcBar:20, throatR:14, nozExitR:26, convLen:20, nozShape:2, spikeTrunc:100,
        noseType:2, rDomain:1.5, res:128, downrange:200 } },
  { n:'Titan flight', d:'methalox, Mach 1.5 in cold dense nitrogen',
    p:{ gammaE:1.20, RgasE:406, Tc:3540, gammaA:1.40, RgasALog:LOG10(304.6), pAmbLog:LOG10(146.7), tAmb:94, vAmb:300,
@@ -870,7 +883,7 @@ const PRESETS = [
       'linear engine: same performance, different shape',
    p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0,
-       pcBar:58, throatR:188, nozExitR:1432, chamR:500, chamLen:300, convLen:400,
+       pcBar:58, throatR:188, nozExitR:1432, chamLen:300, convLen:400,
        nozShape:2, spikeTrunc:25, noseType:2, noseLen:1500, foreLen:2000, wallT:25,
        res:192, rDomain:1.5, downrange:6000 } },
  { n:'Traveler IV', d:'USC RPL 2019, first student rocket past the Karman line',
@@ -1244,6 +1257,11 @@ function updateMetrics(){
     `design; the flow is turned from axial to the throat angle of ${fmt(D.spikeNue,0)}° by two ` +
     `arcs about a common centre, so the gap stays constant through the turn and the passage ` +
     `area falls to the throat area and no further.` +
+    ` The throat is an annulus of area π·throat², so its width is set by the radius it is ` +
+    `wrapped around: gap over lip radius is about 1/(2ε), here ${fmt(D.spikeGap,2)} mm on ` +
+    `${fmt(D.re,0)} mm, or ${fmt(100*D.spikeGap/Math.max(D.re,1e-9),2)}%. That ratio does not ` +
+    `depend on how big the engine is, only on ε, which is why high-expansion plug nozzles are ` +
+    `built as a ring of separate thruster cells rather than one continuous slot.` +
     (D.eps > 2.5
       ? ` At ε ${fmt(D.eps,1)} the annular gap is ${fmt(D.spikeGap,2)} mm and measured mass ` +
         `flow runs about 30% under the choked-throat figure above. That deficit is the wall ` +
@@ -1396,6 +1414,13 @@ function updateMetrics(){
     rows('Nozzle, 1-D ideal', [
       ['expansion ratio ε', fmt(D.eps,2) + ' : 1'],
       ['throat / exit R',   fmt(D.rt,2) + ' / ' + fmt(D.re,2) + ' mm'],
+    ] .concat(D.spike ? [
+      ['chamber radius',  fmt(D.chamRUsed,1) + ' mm, derived at ' +
+                          fmt(P.contractRatio,1) + ':1 contraction'],
+      ['centrebody there',fmt(D.plugChamR,1) + ' mm'],
+      ['throat gap',      fmt(D.spikeGap,2) + ' mm around ' +
+                          fmt(2 * Math.PI * D.plugChamR / 1000, 2) + ' m of circumference'],
+    ] : []).concat([
       [D.spike ? 'throat flow angle' : 'half-angle',
                             fmt(D.halfAngle,1) + '°' +
                             (P.nozShape === 0 ? ` (λ ${fmt(D.lambda,3)})`
@@ -1415,10 +1440,10 @@ function updateMetrics(){
     ].concat(D.spike ? [
       ['cowl lip radius',   fmt(D.re,2) + ' mm'],
       ['spike root radius', fmt(D.spikeR0,2) + ' mm'],
-      ['spike built',       fmt(D.spikeBuilt,1) + ' mm of ' + fmt(P.divLen,0) +
+      ['spike built',       fmt(D.spikeBuilt,1) + ' mm of ' + fmt(D.spikeFull,0) +
                             ' (' + fmt(P.spikeTrunc,0) + '%)'],
       ['spike base radius', fmt(D.spikeBaseR,2) + ' mm'],
-    ] : [])) + '<hr>' +
+    ] : []))) + '<hr>' +
     rows('Gases', [
       ['exhaust γ / M',   fmt(D.g,2) + ' / ' + fmt(D.Me_M,1) + ' g/mol'],
       ['exhaust R',       fmt(D.Rg,0) + ' J/kg·K'],
@@ -4622,6 +4647,31 @@ for (const name of Object.keys(HARDWARE)){
     return { got:d.mdot, want:want.mdot[0], lo:want.mdot[1], hi:want.mdot[2], unit:'kg/s' };
   });
 }
+
+/* ---- nothing is silently overridden ----
+   A preset asked for a 500 mm chamber and the geometry used 1484 without saying so, because
+   for a plug nozzle the chamber radius is not a free parameter. The value is derived now and
+   presets no longer declare it, but the class of fault is worth a check: whatever a preset
+   asks for is what the model should use, to within the control's own step. */
+vAdd('Presets are used as declared', 'fast', async () => {
+  const derivedKeys = new Set([]);          // nothing is allowed to be quietly rewritten
+  const bad = [];
+  for (const pr of PRESETS){
+    vSetPreset(pr.n);
+    for (const k in pr.p){
+      if (derivedKeys.has(k)) continue;
+      const step = (SPEC[k] && SPEC[k].step) || 1e-9;
+      if (Math.abs(P[k] - pr.p[k]) > step * 0.5001 + 1e-9)
+        bad.push(`${pr.n}.${k}: asked ${pr.p[k]}, got ${P[k]}`);
+    }
+    // and the geometry has to use the radii it was given
+    if (Math.abs(GEO.throatR - P.throatR) > 1e-6) bad.push(`${pr.n}: throat radius rewritten`);
+    if (Math.abs(GEO.nozExitR - P.nozExitR) > 1e-6) bad.push(`${pr.n}: exit radius rewritten`);
+    if (!isSpike() && Math.abs(GEO.chamR - P.chamR) > 1e-6)
+      bad.push(`${pr.n}: chamber radius rewritten`);
+  }
+  return { got:bad.length, want:0, lo:0, hi:0, unit:'overridden', err:bad.slice(0,4).join('; ') };
+});
 
 /* ---- geometry ---- */
 vAdd('Plug contour: throat area matches the design, eps 1 to 200', 'fast', async () => {
