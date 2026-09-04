@@ -170,6 +170,54 @@ exit radii.
 
 ### Geometry
 
+A plug nozzle that expands entirely outside has to turn the flow by the full Prandtl-Meyer
+angle of its exit Mach number. That angle passes a right angle at an expansion ratio of about
+33 for gamma 1.22, and beyond it the Angelino construction folds over: the characteristic
+leaving the cowl lip points forwards, and the spike root comes out at a **larger** radius than
+the lip, which is not a nozzle at all. The tool used to build that geometry anyway and blame
+the grid for the result.
+
+Real plug nozzles do not work that way either. Above the limit, part of the expansion now
+happens inside an annular duct between the cowl and the spike and the rest on the spike, which
+is what internal-external expansion means and what engines of this kind actually do. The
+internal share is the smallest that keeps the external turn within 78 degrees, so nothing
+changes below the limit: at epsilon 3.4 and 8.2 the internal ratio is exactly 1 and the
+geometry is identical to the pure external one that was validated before.
+
+| epsilon | nu_e | internal ratio | external turn | spike root | cowl lip | throat gap |
+|---|---|---|---|---|---|---|
+| 3.4 | 48.3 deg | 1.00 | 48.3 deg | 23.4 | 26 | 3.44 mm |
+| 18.4 | 80.8 deg | 1.01 | 78 deg | 58.7 | 60 | 1.55 mm |
+| 32.7 | 89.3 deg | 1.13 | 78 deg | 78.3 | 80 | 1.20 mm |
+| 58.4 | 97.1 deg | 1.32 | 78 deg | 105.1 | 107 | 0.91 mm |
+| 204 | 111.4 deg | 1.91 | 78 deg | 198.0 | 200 | 0.49 mm |
+
+The spike root is inside the lip at every ratio, which is checked. Both walls are tabulated on
+one axial grid rather than solved analytically, because the duct has to diverge from its throat
+to the mouth of the external fan and a wall whose offset varies with turn angle cannot be
+inverted for z in closed form. That also collapses the shader's plug geometry to two lookups.
+
+The duct's own throat is at the head of the turn, where the passage is still axial, and its
+width is solved together with the turn radius so that annulus is exactly the throat area. The
+minimum passage area over all surfaces spanning the duct comes out within 5 % of the design
+throat area from epsilon 1 to 204.
+
+Resolution follows. The body-fitted mapping now fits the tabulated walls, holds full fitting
+through the throat rather than tapering across the whole nozzle, and looks for the throat where
+the duct is actually narrowest instead of at the cowl lip. Cells across the annular gap:
+
+| case | before | after |
+|---|---|---|
+| epsilon 3.4 | 19.2 | 29.7 |
+| epsilon 58 | 9.6 | 27.9 |
+| epsilon 100 | 1.9 | 24.1 |
+| XRS-2200 preset | 4.9 | 45.9 |
+
+The XRS-2200 case, which was previously beyond what the tool could represent, is now resolved
+better than the reference bell.
+
+### Contour construction
+
 The throat is inclined at the Prandtl-Meyer angle of the exit Mach number, which is 48 degrees
 at epsilon 3.45, so the flow has to be turned from axial before it gets there. The turn is a
 pair of circular arcs about a common centre, one for the centrebody and one for the cowl, three

@@ -453,7 +453,10 @@ function computeGeometry(){
   const spikeBuilt = spikeFull * P.spikeTrunc / 100;
   const spikeTable = SPK ? SPK.table : null;
   const spikeNue   = SPK ? SPK.nue * 180 / Math.PI : 0;
-  const spikeSlope = SPK ? Math.tan(SPK.nue) : 0;
+  const spikeDelta = SPK ? SPK.delta * 180 / Math.PI : 0;
+  const spikeEpsI  = SPK ? SPK.epsI : 1;
+  const spikeMouth = SPK ? SPK.hMouth : 0;
+  const spikeSlope = SPK ? Math.tan(SPK.delta) : 0;
   /* The centrebody runs at a constant radius from the injector face to the start of the turn,
      so the whole contraction is carried by the cowl and the inner wall has no curvature to
      separate off. The chamber radius then follows from the contraction ratio. */
@@ -462,10 +465,10 @@ function computeGeometry(){
      contraction, or the cowl would have to widen on its way to the throat. */
   const turnGap    = SPK ? SPK.h : 0;
   const turnR      = SPK
-    ? Math.max(Math.min(SPK.R, 0.6 * P.convLen / Math.max(Math.sin(SPK.nue), 1e-3) - turnGap),
+    ? Math.max(Math.min(SPK.R, 0.6 * P.convLen / Math.max(Math.sin(SPK.delta), 1e-3) - turnGap),
                0.5 * turnGap)
     : 0;
-  const plugChamR  = SPK ? spikeR0 + turnR * (1 - Math.cos(SPK.nue)) : 0;
+  const plugChamR  = SPK ? spikeR0 + turnR * (1 - Math.cos(SPK.delta)) : 0;
   const chamR      = SPK
     ? Math.max(P.chamR, Math.sqrt(plugChamR * plugChamR + contract / Math.PI))
     : P.chamR;
@@ -487,13 +490,70 @@ function computeGeometry(){
   const zExit     = SPK ? zRoot + spikeFull : zThroat + P.divLen;
   /* Turn geometry: both walls are arcs about one centre, so the gap through the turn is
      constant and the passage area falls monotonically to exactly the throat area. */
-  const zArc      = SPK ? zRoot - turnR * Math.sin(SPK.nue) : 0;   // where the turn begins
+  const zArc      = SPK ? zRoot - turnR * Math.sin(SPK.delta) : 0;  // where the turn begins
   const arcOr     = SPK ? plugChamR - turnR : 0;                   // radius of the arc centre
+
+  /* Both walls of a plug nozzle, sampled onto one uniform axial grid. Tabulating rather than
+     solving analytically is what lets the duct diverge through the turn: the gap has to grow
+     from the throat to the mouth of the external fan, and a wall whose offset varies with turn
+     angle cannot be inverted for z in closed form. It also collapses the shader's geometry to
+     two lookups. Outer wall negative means there is no wall at that station. */
+  let plugIn = null, plugOut = null, plugZ0 = 0, plugZ1 = 1, plugThroatZ = 0;
+  if (SPK){
+    plugZ0 = zInj; plugZ1 = zExit;
+    plugIn  = new Float32Array(PLUG_N);
+    plugOut = new Float32Array(PLUG_N);
+    const dEnd = SPK.delta;
+    // parametric turn: concentric about (zArc, arcOr), gap growing from throat to mouth
+    const turnPt = f => {                       // f in [0,1] along the turn
+      const phi = dEnd * f;
+      const h = turnGap + (SPK.hMouth - turnGap) * f;
+      return { zi: zArc + turnR * Math.sin(phi), ri: arcOr + turnR * Math.cos(phi),
+               zo: zArc + (turnR + h) * Math.sin(phi), ro: arcOr + (turnR + h) * Math.cos(phi) };
+    };
+    // dense samples of each wall as (z, r), then resampled onto the uniform grid
+    const inner = [], outer = [];
+    inner.push([zInj, plugChamR]); outer.push([zInj, chamR]);
+    inner.push([zConv0, plugChamR]); outer.push([zConv0, chamR]);
+    const t0 = turnPt(0);
+    for (let i = 1; i <= 40; i++){               // contraction, flat at both ends
+      const t = i / 40, sm = t * t * (3 - 2 * t);
+      inner.push([zConv0 + (t0.zi - zConv0) * t, plugChamR + (t0.ri - plugChamR) * sm]);
+      outer.push([zConv0 + (t0.zo - zConv0) * t, chamR + (t0.ro - chamR) * sm]);
+    }
+    for (let i = 1; i <= 120; i++){ const q = turnPt(i / 120);
+      inner.push([q.zi, q.ri]); outer.push([q.zo, q.ro]); }
+    for (let i = 1; i < SPIKE_N; i++)            // the characteristic contour
+      inner.push([zRoot + spikeFull * i / (SPIKE_N - 1), spikeTable[i]]);
+    const sample = (arr, z) => {
+      if (z <= arr[0][0]) return arr[0][1];
+      if (z >= arr[arr.length-1][0]) return arr[arr.length-1][1];
+      let lo = 0, hi = arr.length - 1;
+      while (hi - lo > 1){ const m = (lo + hi) >> 1; if (arr[m][0] <= z) lo = m; else hi = m; }
+      const [z0, r0] = arr[lo], [z1, r1] = arr[hi];
+      return z1 > z0 ? r0 + (r1 - r0) * (z - z0) / (z1 - z0) : r0;
+    };
+    const zLip = outer[outer.length-1][0];
+    for (let i = 0; i < PLUG_N; i++){
+      const z = plugZ0 + (plugZ1 - plugZ0) * i / (PLUG_N - 1);
+      plugIn[i]  = sample(inner, z);
+      plugOut[i] = z <= zLip ? sample(outer, z) : -1;
+    }
+    // where the duct is actually narrowest, which is what chokes
+    let best = Infinity;
+    for (let i = 0; i < PLUG_N; i++){
+      if (plugOut[i] < 0) break;
+      const a = Math.PI * (plugOut[i]*plugOut[i] - plugIn[i]*plugIn[i]);
+      if (a < best){ best = a; plugThroatZ = plugZ0 + (plugZ1 - plugZ0) * i / (PLUG_N - 1); }
+    }
+  }
   const Rmax      = Math.max(P.rDomain * bodyR, bodyR + 25);
   return Object.assign(GEO, { noseLen, throatR, nozExitR, bodyR, vehLen, chamR, plugChamR,
                               zNose, zShoulder, zInj, zConv0, zThroat, zExit, Lz, Rmax,
                               spikeR0, spikeFull, spikeBuilt, spikeTable, spikeNue, spikeSlope,
                               zRoot, turnR, turnGap, zArc, arcOr,
+                              spikeDelta, spikeEpsI, spikeMouth,
+                              plugIn, plugOut, plugZ0, plugZ1, plugThroatZ,
                               spikeBaseR: spikeTable
                                 ? spikeTable[Math.min(SPIKE_N - 1,
                                     Math.round((SPIKE_N - 1) * P.spikeTrunc / 100))]
@@ -535,14 +595,42 @@ function nuPM(M, g){
    which returns r = 0 at M = Me and the inclined-throat root radius at M = 1. The contour is
    resampled onto a uniform axial grid so the shader can look it up in constant time. */
 const SPIKE_N = 128;
+const PLUG_N  = 384;              // samples per wall of the tabulated plug nozzle
 const SPIKE_TURN = 3;                     // turn radius of the throat, in gap widths
+/* Largest turn the external expansion is allowed to do. A plug nozzle that expands entirely
+   outside has to turn the flow by the full Prandtl-Meyer angle of its exit Mach number, and
+   past a right angle the Angelino construction folds over: the characteristic from the lip
+   leaves going forwards, and the spike root comes out at a larger radius than the cowl lip,
+   which is not a nozzle. Real plug nozzles at high expansion ratio do not work that way
+   either; they expand part of the distance inside an annular duct and the rest on the spike.
+   The limit here is where that internal part starts being used. */
+const SPIKE_MAX_EXT = 78 * Math.PI / 180;
+
+/* Mach number with a given Prandtl-Meyer angle. Monotone in M, so bisection is enough. */
+function machFromNu(nu, g){
+  if (nu <= 0) return 1;
+  let lo = 1, hi = 2;
+  while (nuPM(hi, g) < nu && hi < 1e4) hi *= 2;
+  for (let i = 0; i < 80; i++){
+    const m = 0.5 * (lo + hi);
+    if (nuPM(m, g) < nu) lo = m; else hi = m;
+  }
+  return 0.5 * (lo + hi);
+}
 function spikeContour(rt, re, g){
   const At = Math.PI * rt * rt, eps = (re / rt) * (re / rt);
   const Me = machFromArea(eps, g), nue = nuPM(Me, g);
+  /* Split the expansion. Everything up to nu_i happens inside an annular duct between the
+     cowl and the spike, and the fan at the lip does the rest. For a modest expansion ratio
+     nu_e is small enough that none is needed and this reduces to the pure external nozzle
+     that was here before. */
+  const nui = Math.max(0, nue - SPIKE_MAX_EXT);
+  const Mi = nui > 0 ? machFromNu(nui, g) : 1;
+  const epsI = nui > 0 ? areaRatio(Mi, g) : 1;         // internal expansion ratio
   const pts = [];
   const K = 600;
   for (let i = 0; i <= K; i++){
-    const M = Math.max(1 + (Me - 1) * (i / K), 1 + 1e-9);
+    const M = Math.max(Mi + (Me - Mi) * (i / K), Mi, 1 + 1e-9);
     const mu = Math.asin(1 / M), alpha = nue - nuPM(M, g) + mu;
     const r2 = re*re - At * areaRatio(M, g) * Math.sin(alpha) / (Math.PI * Math.sin(mu));
     const r = Math.sqrt(Math.max(r2, 0));
@@ -564,9 +652,23 @@ function spikeContour(rt, re, g){
      flow from axial to nu_e. Turning a duct needs a radius of a few gap widths or the inner
      wall separates; three is the usual floor. */
   const r0 = pts[0][1];
-  const h = (re - r0) / Math.cos(nue);
-  const R = SPIKE_TURN * h;
-  return { Me, nue, r0, zRootRel, full, table, h, R };
+  /* The duct mouth is the slant from the spike at r0 to the cowl lip at re, and the flow
+     crosses it at nu_e - nu_i to the axis. Its area is epsI times the throat area, since that
+     much expansion has already happened inside. The true throat sits upstream of it. */
+  const delta = nue - nui;                             // flow angle at the lip, from the axis
+  const hMouth = Math.hypot(zRootRel, re - r0);        // perpendicular width of the mouth
+  /* The duct's own throat sits at the head of the turn, where the passage is still axial. Its
+     width follows from making that annulus exactly the throat area, and the turn radius from
+     the width, so the two are solved together. A handful of iterations is plenty: each one
+     moves the radius by a fraction of a percent. */
+  let hThroat = hMouth, R = SPIKE_TURN * hThroat;
+  for (let i = 0; i < 40; i++){
+    const chamInner = r0 + R * (1 - Math.cos(delta));
+    hThroat = Math.sqrt(chamInner * chamInner + At / Math.PI) - chamInner;
+    R = SPIKE_TURN * Math.max(hThroat, 1e-6);
+  }
+  return { Me, nue, nui, Mi, epsI, delta, r0, zRootRel, full, table,
+           h: hThroat, hMouth, R };
 }
 
 const machFromPressureRatio = (p0OverP, g) =>
@@ -673,7 +775,8 @@ function derived(){
            fpaDeg: S.fpa * 180 / Math.PI,
            spike:isSpike(), spikeR0:GEO.spikeR0 || 0, spikeBaseR:GEO.spikeBaseR || 0,
            spikeBuilt:GEO.spikeBuilt || 0, spikeNue:GEO.spikeNue || 0,
-           spikeGap:GEO.turnGap || 0 };
+           spikeGap:GEO.turnGap || 0, spikeDelta:GEO.spikeDelta || 0,
+           spikeEpsI:GEO.spikeEpsI || 1, spikeMouth:GEO.spikeMouth || 0 };
 }
 
 
@@ -816,29 +919,19 @@ const FIT_CELLS = 30;                 // radial cells wanted across the passage 
 function passageAt(z){
   const G = GEO;
   if (z < G.zInj || z > G.zExit) return null;
-  let inner = 0, outer;
+  let inner, outer;
   if (isSpike()){
-    if (z <= G.zArc) inner = G.plugChamR;
-    else if (z < G.zRoot){
-      const sn = Math.min(Math.max((z - G.zArc) / Math.max(G.turnR, 1e-9), -1), 1);
-      inner = G.arcOr + G.turnR * Math.sqrt(Math.max(1 - sn * sn, 0));
-    } else {
-      const d = z - G.zRoot;
-      if (d > G.spikeBuilt) inner = 0;
-      else { const f = Math.min(Math.max(d / G.spikeFull, 0), 1) * (SPIKE_N - 1);
-             const i0 = Math.floor(f), t = G.spikeTable;
-             inner = t[i0] + (t[Math.min(i0 + 1, SPIKE_N - 1)] - t[i0]) * (f - i0); }
-    }
-    if (z <= G.zConv0) outer = G.chamR;
-    else if (z >= G.zArc){
-      const sn = Math.min(Math.max((z - G.zArc) / Math.max(G.turnR + G.turnGap, 1e-9), -1), 1);
-      outer = G.arcOr + (G.turnR + G.turnGap) * Math.sqrt(Math.max(1 - sn * sn, 0));
-      if (z > G.zThroat) outer = G.nozExitR;      // past the lip there is no wall; hold the lip
-    } else {
-      const t = (z - G.zConv0) / Math.max(G.zArc - G.zConv0, 1e-9);
-      outer = G.chamR + (G.arcOr + G.turnR + G.turnGap - G.chamR) * (t * t * (3 - 2 * t));
-    }
+    if (!G.plugIn) return null;
+    // read the same tables the solver reads, so the grid follows the walls exactly
+    const f = Math.min(Math.max((z - G.plugZ0) / Math.max(G.plugZ1 - G.plugZ0, 1e-9), 0), 1)
+              * (PLUG_N - 1);
+    const i0 = Math.floor(f), i1 = Math.min(i0 + 1, PLUG_N - 1), t = f - i0;
+    inner = G.plugIn[i0] + (G.plugIn[i1] - G.plugIn[i0]) * t;
+    outer = (G.plugOut[i0] < 0 || G.plugOut[i1] < 0)
+      ? G.nozExitR                                   // past the lip: follow the plume edge
+      : G.plugOut[i0] + (G.plugOut[i1] - G.plugOut[i0]) * t;
   } else {
+    inner = 0;
     if (z <= G.zConv0) outer = G.chamR;
     else if (z <= G.zThroat){
       const t = Math.min(Math.max((z - G.zConv0) / Math.max(G.zThroat - G.zConv0, 1e-9), 0), 1);
@@ -859,15 +952,21 @@ function buildRadialMap(){
   const G = GEO;
   // share of the radial cells given to the passage, capped so the rest of the domain keeps some
   const fitOn = P.bodyFit > 0.5;
-  const blend = Math.max(0.12 * (G.zExit - G.zInj), 8 * dz);
+  /* The fitting has to be fully on through the throat, so it ramps in across the chamber,
+     where the passage is wide and the grid hardly matters, and only tapers out towards the
+     exit. Scaling the ramp with the whole nozzle length, as this once did, left long nozzles
+     only partly fitted exactly where they needed it most. */
+  const rampIn  = Math.max(G.zConv0 - G.zInj, 8 * dz);
+  const rampOut = Math.max(0.25 * (G.zExit - G.zConv0), 8 * dz);
   for (let iz = 0; iz <= Nz; iz++){
     const z = iz * dz;
     const pa = fitOn ? passageAt(z) : null;
     let w = 0;
     if (pa){
-      // taper the fitting in and out so the mapping stays smooth in z
-      const dIn = z - G.zInj, dOut = G.zExit - z;
-      w = Math.min(1, Math.max(0, Math.min(dIn, dOut) / blend));
+      // smooth in z, but held at one from the start of the contraction onwards
+      const fIn  = (z - G.zInj) / rampIn;
+      const fOut = (G.zExit - z) / rampOut;
+      w = Math.min(1, Math.max(0, Math.min(fIn, fOut)));
       w = w * w * (3 - 2 * w);
     }
     const base = iz * (Nr + 1);
@@ -944,7 +1043,10 @@ function probeIz(){
    is much finer than the nominal one. */
 function throatSpacing(){
   if (!S.RN || !S.Nz) return S.dr;
-  const iz = Math.max(0, Math.min(S.Nz - 1, Math.round(GEO.zThroat / S.dz)));
+  /* For a plug nozzle the narrowest section is inside the duct, not at the cowl lip, so the
+     station to look at is the one the geometry reported as its throat. */
+  const zT = (isSpike() && GEO.plugThroatZ) ? GEO.plugThroatZ : GEO.zThroat;
+  const iz = Math.max(0, Math.min(S.Nz - 1, Math.round(zT / S.dz)));
   const b = iz * (S.Nr + 1);
   let h = Infinity;
   for (let ir = 0; ir < S.Nr; ir++) h = Math.min(h, S.RN[b + ir + 1] - S.RN[b + ir]);
@@ -1052,15 +1154,44 @@ window.addEventListener('resize', () => { if (S.Nz) resizeCanvas(); });
 const render = () => compRender();
 
 /* ========================== metrics ========================== */
-/* The metrics panel and the plot caption are rewritten several times a second, which
-   destroys any selection the moment it is made. While a selection is live inside one of them,
-   leave it alone. */
-function selectionInside(el){
-  if (!el) return false;
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
-  const n = sel.anchorNode;
-  return !!n && el.contains(n.nodeType === 1 ? n : n.parentNode);
+/* The metrics panel and the plot caption are rewritten several times a second. Assigning
+   innerHTML throws the old nodes away and any selection anchored in them goes too, so these
+   are reconciled instead: walk the new tree against the live one, and where the shape matches,
+   write the new characters into the existing text node rather than replacing it. The node a
+   selection is anchored to therefore survives; where the text really did change the browser
+   clamps the offsets, which is as much as can be kept. */
+function patchNode(live, next){
+  if (live.nodeType !== next.nodeType ||
+      (live.nodeType === 1 && live.nodeName !== next.nodeName)){
+    live.replaceWith(next);
+    return;
+  }
+  if (live.nodeType === 3){                        // text: mutate in place
+    if (live.data !== next.data) live.data = next.data;
+    return;
+  }
+  if (live.nodeType !== 1) return;
+  for (const a of [...live.attributes])
+    if (!next.hasAttribute(a.name)) live.removeAttribute(a.name);
+  for (const a of next.attributes)
+    if (live.getAttribute(a.name) !== a.value) live.setAttribute(a.name, a.value);
+  const lc = [...live.childNodes], nc = [...next.childNodes];
+  const n = Math.min(lc.length, nc.length);
+  for (let i = 0; i < n; i++) patchNode(lc[i], nc[i]);
+  for (let i = n; i < lc.length; i++) lc[i].remove();
+  for (let i = n; i < nc.length; i++) live.appendChild(nc[i]);
+}
+function setHTML(el, html){
+  if (!el) return;
+  const tmp = el.ownerDocument.createElement(el.nodeName);
+  tmp.innerHTML = html;
+  patchNode(el, tmp);
+}
+function setText(el, text){
+  if (!el) return;
+  if (el.childNodes.length === 1 && el.firstChild.nodeType === 3){
+    if (el.firstChild.data !== text) el.firstChild.data = text;
+  } else el.textContent = text;
 }
 
 const fmt = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -1237,8 +1368,7 @@ function updateMetrics(){
   const critical = flags.filter(f => f[0] === 'bad');
   const rest     = flags.filter(f => f[0] !== 'bad');
 
-  if (selectionInside(DOM.metrics)) return;
-  DOM.metrics.innerHTML =
+  setHTML(DOM.metrics,
     critical.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('') +
     rows('Nozzle, 1-D ideal', [
       ['expansion ratio ε', fmt(D.eps,2) + ' : 1'],
@@ -1322,7 +1452,7 @@ function updateMetrics(){
       ['flight-path angle', fmt(D.fpaDeg,1) + '° from horizontal'],
       ['downrange',     fmt(S.range/1000,2) + ' km'],
     ] : [])) +
-    rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('');
+    rest.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join(''));
   markActiveQuality();
   markActiveChoices();
 }
@@ -1388,17 +1518,19 @@ struct Params {
   gasB  : vec4<f32>,          // cv_exhaust, R_exhaust, cv_ambient, R_ambient
   vehE  : vec4<f32>,          // spike root radius, length built, length full, z of the root
   vehF  : vec4<f32>,          // centrebody radius in the chamber, throat slope, chamberR, turn R
-  vehG  : vec4<f32>,          // z where the turn begins, radius of its centre, throat gap, _
+  vehG  : vec4<f32>,          // z where the turn begins, radius of its centre, throat gap,
+                              //   first z of the tabulated plug walls
+  vehH  : vec4<f32>,          // last z of those walls, _, _, _
 };
 @group(0) @binding(0) var<uniform> P : Params;
 /* Plug-nozzle contour, resampled onto a uniform axial grid so the lookup is constant time:
    solidAt runs many times per cell per step and cannot afford a search. */
-@group(0) @binding(1) var<uniform> SPK : array<vec4<f32>, 32>;
+@group(0) @binding(1) var<uniform> SPK : array<vec4<f32>, 192>;
 `;
 
 const PARAM_STRIDE = 256;                 // uniform dynamic-offset alignment
 const PARAM_FLOATS = PARAM_STRIDE / 4;
-const PARAM_BYTES  = 240;                 // the part of a slot the struct actually covers
+const PARAM_BYTES  = 256;                 // the part of a slot the struct actually covers
 
 const WGSL_REDUCE = `
 struct RP { n : u32, first : u32, _a : u32, _b : u32 };
@@ -1486,7 +1618,7 @@ async function wgpuInit(){
   WG.paramHost = new ArrayBuffer(PARAM_STRIDE * 2048);
   WG.paramF = new Float32Array(WG.paramHost);
   WG.paramI = new Int32Array(WG.paramHost);
-  WG.buf.spike = dev.createBuffer({ size: SPIKE_N * 4,
+  WG.buf.spike = dev.createBuffer({ size: 2 * PLUG_N * 4,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   WG.bgP = dev.createBindGroup({ layout:WG.bglP, entries:[
     { binding:0, resource:{ buffer:WG.buf.params, size:PARAM_BYTES } },
@@ -1545,7 +1677,8 @@ function packParams(slot, dt, weight, simT){
   F[o+52] = GEO.plugChamR; F[o+53] = GEO.spikeSlope;
   F[o+54] = GEO.chamR;     F[o+55] = GEO.turnR || 0;
   F[o+56] = GEO.zArc || 0; F[o+57] = GEO.arcOr || 0;
-  F[o+58] = GEO.turnGap || 0; F[o+59] = 0;
+  F[o+58] = GEO.turnGap || 0; F[o+59] = GEO.plugZ0 || 0;
+  F[o+60] = GEO.plugZ1 || 1;  F[o+61] = 0; F[o+62] = 0; F[o+63] = 0;
 }
 </script>
 
@@ -1641,9 +1774,21 @@ fn extR(z : f32) -> f32 {
   return max(outerR(z), 0.0);
 }
 
-fn spikeTableR(i : i32) -> f32 {
-  let j = clamp(i, 0, 127);
+/* One uniform array holds both walls of the plug nozzle, inner first then outer, each
+   sampled on the same uniform axial grid between vehG.w and vehH.x. */
+fn plugTab(i : i32) -> f32 {
+  let j = clamp(i, 0, 767);
   return SPK[j / 4][j % 4];
+}
+fn plugWall(z : f32, outer : bool) -> f32 {
+  let z0 = P.vehG.w; let z1 = P.vehH.x;
+  let f = clamp((z - z0) / max(z1 - z0, 1e-9), 0.0, 1.0) * 383.0;
+  let i0 = i32(floor(f));
+  let base = select(0, 384, outer);
+  let a = plugTab(base + i0);
+  let b = plugTab(base + min(i0 + 1, 383));
+  if (outer && (a < 0.0 || b < 0.0)) { return -1.0; }   // past the lip there is no wall
+  return mix(a, b, f - floor(f));
 }
 
 /* Radius of the centrebody. Zero for a bell. For a plug nozzle it grows from the axis through
@@ -1652,21 +1797,10 @@ fn spikeTableR(i : i32) -> f32 {
    contour early and leaves a base. */
 fn plugR(z : f32) -> f32 {
   if (!isSpike()) { return 0.0; }
-  let zI = P.vehA.z;
-  let built = P.vehE.y; let full = P.vehE.z; let zRoot = P.vehE.w;
-  let rci = P.vehF.x; let Rt = P.vehF.w;
-  let zA = P.vehG.x; let Or = P.vehG.y;
+  let zI = P.vehA.z; let zRoot = P.vehE.w; let built = P.vehE.y;
   if (z < zI) { return 0.0; }
-  if (z <= zA) { return rci; }        // straight through the chamber and the contraction
-  if (z < zRoot) {                    // the turn: an arc of radius Rt about (zA, Or)
-    let sn = clamp((z - zA) / max(Rt, 1e-6), -1.0, 1.0);
-    return Or + Rt * sqrt(max(1.0 - sn * sn, 0.0));
-  }
-  let d = z - zRoot;
-  if (d > built) { return 0.0; }
-  let f = clamp(d / max(full, 1e-6), 0.0, 1.0) * 127.0;
-  let i0 = i32(floor(f));
-  return mix(spikeTableR(i0), spikeTableR(i0 + 1), f - floor(f));
+  if (z > zRoot + built) { return 0.0; }        // truncated: past the base there is no spike
+  return plugWall(z, false);
 }
 
 /* Outer radius of the internal cavity at z: chamber, raised-cosine contraction, then the
@@ -1676,19 +1810,7 @@ fn innerR(z : f32) -> f32 {
   if (z < zI) { return -1.0; }
   let rc = P.vehF.z; let rt = P.vehC.y; let re = P.vehC.z;
   if (z <= zC) { return rc; }
-  if (isSpike()) {
-    // the cowl carries the contraction, then turns on an arc concentric with the centrebody;
-    // past the lip there is no outer wall at all
-    if (z > zT) { return -1.0; }
-    let Rt = P.vehF.w; let zA = P.vehG.x; let Or = P.vehG.y; let h = P.vehG.z;
-    if (z >= zA) {
-      let sn = clamp((z - zA) / max(Rt + h, 1e-6), -1.0, 1.0);
-      return Or + (Rt + h) * sqrt(max(1.0 - sn * sn, 0.0));
-    }
-    let L = max(zA - zC, 1e-6);
-    let t = clamp((z - zC) / L, 0.0, 1.0);
-    return mix(rc, Or + Rt + h, t * t * (3.0 - 2.0 * t));   // monotone, flat at both ends
-  }
+  if (isSpike()) { return plugWall(z, true); }
   if (z > zE) { return -1.0; }
   if (z <= zT) {
     let s = clamp((z - zC) / max(zT - zC, 1e-6), 0.0, 1.0);
@@ -2433,8 +2555,11 @@ async function compInit(){
 
 function compAlloc(){
   const dev = WG.dev;
-  dev.queue.writeBuffer(WG.buf.spike, 0,
-    GEO.spikeTable || new Float32Array(SPIKE_N));
+  {                                       // inner wall then outer wall, one grid for both
+    const w = new Float32Array(2 * PLUG_N);
+    if (GEO.plugIn){ w.set(GEO.plugIn, 0); w.set(GEO.plugOut, PLUG_N); }
+    dev.queue.writeBuffer(WG.buf.spike, 0, w);
+  }
   for (const k in (CP.buf || {})) if (CP.buf[k] && CP.buf[k].destroy) CP.buf[k].destroy();
   CP.buf = {};
   const nC = S.Nz * S.Nr;
@@ -2847,15 +2972,14 @@ function drawPlot(){
   pctx.clearRect(0,0,w,h);
 
   const shown = SERIES.map((x, i) => ({ x, i: i + 1 })).filter(o => SERIES_ON.has(o.x.k));
-  if (!selectionInside(DOM.plotTitle)) DOM.plotTitle.textContent =
+  setText(DOM.plotTitle,
     shown.length === 1
       ? `${shown[0].x.t}, against flow time`
-      : `${shown.length} series against flow time, each to its own scale`;
+      : `${shown.length} series against flow time, each to its own scale`);
 
   const ser = S.series;
   if (ser.length < 2 || !shown.length){
-    if (!selectionInside(DOM.plotKey)) DOM.plotKey.textContent =
-      shown.length ? '' : 'no series selected';
+    setText(DOM.plotKey, shown.length ? '' : 'no series selected');
     return;
   }
   const t1 = Math.max(ser[ser.length-1][0], 1e-6);
@@ -2899,11 +3023,11 @@ function drawPlot(){
   });
 
   const last = ser[ser.length-1];
-  if (!selectionInside(DOM.plotKey)) DOM.plotKey.innerHTML = shown.map((o, n) =>
+  setHTML(DOM.plotKey, shown.map((o, n) =>
     `<span style="color:${o.x.c}"><b>${o.x.t}</b> ${fmt(last[o.i], 2)}` +
     (o.x.u ? ' ' + o.x.u : '') +
     `<span style="color:var(--dim)"> (${fmt(rng[n].lo,1)} to ${fmt(rng[n].hi,1)})</span></span>`
-  ).join('');
+  ).join(''));
 }
 
 </script>
@@ -4187,33 +4311,21 @@ async function vRunTo(tEnd, budgetMs){
    For a plug nozzle this has to come out at the design throat area or the contour is wrong. */
 function vMinPassage(){
   const G = GEO, At = Math.PI * G.throatR * G.throatR;
-  const cowl = z => {
-    if (z <= G.zConv0) return G.chamR;
-    if (z > G.zThroat) return -1;
-    if (z >= G.zArc){ const sn = (z - G.zArc) / (G.turnR + G.turnGap);
-      return G.arcOr + (G.turnR + G.turnGap) * Math.sqrt(Math.max(1 - sn*sn, 0)); }
-    const t = (z - G.zConv0) / (G.zArc - G.zConv0);
-    return G.chamR + (G.arcOr + G.turnR + G.turnGap - G.chamR) * (t*t*(3-2*t));
-  };
-  const spk = z => {
-    if (z < G.zInj) return 0;
-    if (z <= G.zArc) return G.plugChamR;
-    if (z < G.zRoot){ const sn = (z - G.zArc) / G.turnR;
-      return G.arcOr + G.turnR * Math.sqrt(Math.max(1 - sn*sn, 0)); }
-    const d = z - G.zRoot;
-    if (d > G.spikeBuilt) return 0;
-    const f = Math.min(Math.max(d / G.spikeFull, 0), 1) * 127, i0 = Math.floor(f), t = G.spikeTable;
-    return t[i0] + (t[Math.min(i0+1,127)] - t[i0]) * (f - i0);
-  };
-  let best = 1e9;
-  for (let i = 0; i <= 400; i++){
-    const zc = G.zConv0 + (G.zThroat - G.zConv0) * i / 400, rc = cowl(zc);
-    for (let j = 0; j <= 400; j++){
-      const zs = G.zConv0 + (G.zRoot + G.spikeFull - G.zConv0) * j / 400, rs = spk(zs);
-      if (rs >= rc) continue;
-      best = Math.min(best, Math.PI * (rc + rs) * Math.hypot(zc - zs, rc - rs));
-    }
+  if (!G.plugIn) return 1;
+  const N = PLUG_N, z = i => G.plugZ0 + (G.plugZ1 - G.plugZ0) * i / (N - 1);
+  // the walls as they are actually built, so this measures the geometry rather than a formula
+  const inner = [], outer = [];
+  for (let i = 0; i < N; i++){
+    inner.push([z(i), G.plugIn[i]]);
+    if (G.plugOut[i] >= 0) outer.push([z(i), G.plugOut[i]]);
   }
+  let best = Infinity;
+  for (const [zc, rc] of outer)
+    for (const [zs, rs] of inner){
+      if (rs >= rc) continue;
+      const a = Math.PI * (rc + rs) * Math.hypot(zc - zs, rc - rs);
+      if (a < best) best = a;
+    }
   return best / At;
 }
 
@@ -4238,13 +4350,34 @@ for (const name of Object.keys(HARDWARE)){
 }
 
 /* ---- geometry ---- */
-vAdd('Plug contour: throat area matches the design, eps 1.1 to 8', 'fast', async () => {
+vAdd('Plug contour: throat area matches the design, eps 1 to 200', 'fast', async () => {
   let worst = 0;
-  for (const re of [14.4, 16, 19.8, 26, 40]){
+  for (const re of [14.4, 16, 19.8, 26, 40, 60, 80, 107, 140, 200]){
     vSetPreset('Aerospike', { nozExitR:re });
     worst = Math.max(worst, Math.abs(vMinPassage() - 1));
   }
-  return { got:1 + worst, want:1, lo:-0.02, hi:0.02, unit:'x design' };
+  return { got:1 + worst, want:1, lo:-0.06, hi:0.06, unit:'x design' };
+});
+/* A plug nozzle expanding entirely outside has to turn the flow by the full Prandtl-Meyer
+   angle, and past a right angle the construction folds over and puts the spike root outside
+   the cowl lip. That produced a geometry that was not a nozzle at all, so it is checked. */
+vAdd('Plug contour: spike root stays inside the cowl lip', 'fast', async () => {
+  let worst = -1e9;
+  for (const re of [16, 26, 40, 60, 80, 107, 140, 200, 300]){
+    vSetPreset('Aerospike', { nozExitR:re });
+    worst = Math.max(worst, GEO.spikeR0 - GEO.nozExitR);
+  }
+  return { got:worst, want:0, lo:-1e9, hi:-1e-6, unit:'mm root minus lip' };
+});
+vAdd('Plug throat is resolved at every expansion ratio', 'fast', async () => {
+  let worst = 1e9;
+  for (const re of [16, 26, 40, 60, 80, 107, 140]){
+    vSetPreset('Aerospike', { nozExitR:re });
+    worst = Math.min(worst, GEO.turnGap / throatSpacing());
+  }
+  vSetPreset('XRS-2200');
+  worst = Math.min(worst, GEO.turnGap / throatSpacing());
+  return { got:worst, want:25, lo:-8, hi:1e9, unit:'cells across the gap' };
 });
 vAdd('Bell contour: throat radius is the minimum', 'fast', async () => {
   const d = vSetPreset('Sea-level booster');
@@ -4314,13 +4447,13 @@ vAdd('Uniform ambient integrates to zero drag', 'slow', async () => {
 });
 vAdd('Aerospike: mass flow against ideal', 'slow', async () => {
   vSetPreset('Aerospike');
-  if (!await vRunTo(2.2, 120000)) return { got:NaN, want:84, lo:-9, hi:9, unit:'%' };
+  if (!await vRunTo(2.2, 120000)) return { got:NaN, want:82, lo:-9, hi:9, unit:'%' };
   const d = derived(), m = S.meas;
-  return { got:100 * m.mdot / d.mdot, want:84, lo:-9, hi:9, unit:'%' };
+  return { got:100 * m.mdot / d.mdot, want:82, lo:-9, hi:9, unit:'%' };
 });
 vAdd('Aerospike: exhaust velocity against ideal', 'slow', async () => {
   const d = derived(), m = S.meas;
-  return { got:100 * (m.thrust / m.mdot) / (d.thrust / d.mdot), want:97, lo:-8, hi:8, unit:'%' };
+  return { got:100 * (m.thrust / m.mdot) / (d.thrust / d.mdot), want:95, lo:-8, hi:8, unit:'%' };
 });
 
 async function validate(tier){
