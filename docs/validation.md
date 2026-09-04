@@ -302,6 +302,37 @@ at high expansion ratios, where separation moves far enough up the bell to be de
 annular gap at those ratios is a small fraction of the throat radius and is not resolvable on
 this grid.
 
+### Linear geometry
+
+A linear aerospike is a ramp extruded across a span, and away from its ends that flow has no
+curvature: a planar slice is the right model for it rather than an approximation. The solver
+takes a switch for this. Revolved, a face at radius r has area proportional to r; extruded, it
+does not, so every metric carries a weight that is either r or 1. The well-balanced pressure
+terms need no special case either way, because for a closed contour the face normals sum to
+zero and their radial components sum to the planar area, and both identities hold under either
+weighting.
+
+What changes above the solver is that the two nozzle radii become heights, so throat area is
+height times span rather than pi*r^2, and the expansion ratio is the ratio of the two rather
+than its square. The plug contour changes with it: mass conservation across a characteristic
+is a length rather than an area, which makes the construction simpler than the annular one.
+
+The point of it is the throat. Revolved, the throat is forced to A_t/(2*pi*r) and gets thinner
+the larger the exit is; extruded, it is whatever the controls ask for, and the span carries the
+area instead. For the XRS-2200 that is a 25.2 mm slot rather than a 12.26 mm one, and split
+across its twenty cells the aspect ratio per cell is 8.7 to 1 rather than 739 to 1 for a
+continuous ring. That is the difference between hardware and a drawing.
+
+**Status.** The geometry is verified: throat area is height times span to three figures, the
+minimum passage over all spanning surfaces is 1.000 times design, the throat height comes out
+exactly as set, and the axisymmetric path is unchanged with all its checks passing. The
+measured performance is not verified. A planar bell reads 88 % of choked mass flow against 94.7
+% for the axisymmetric equivalent, which is plausible since the two are genuinely different
+nozzles, but a planar plug reads 60 % against 82 %, and a gap that size is not explained by the
+geometry differing. Mass flow is 58 % at the throat itself, so it is not the plume or the
+measurement bound. Until that is accounted for the switch is off by default and its measured
+block should not be trusted for plug nozzles.
+
 ### Why the annular throat is so thin
 
 The throat of a plug nozzle is an annulus of area pi*throat^2 wrapped around the centrebody, so

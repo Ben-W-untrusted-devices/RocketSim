@@ -195,6 +195,15 @@ const CONTROLS = [
    { k:'riseMs',  t:'Ignition rise time',    min:0.01,max:20,  step:0.01,v:0.5,  unit:'ms',
      hint:'Chamber conditions ramp from ambient to full over this interval, smoothstep in ' +
           'time. Shorter ramps produce a stronger starting shock.' },
+   { k:'planar', t:'Linear geometry (planar slice)', kind:'check', v:0, rebuild:true,
+     hint:'Off, the slice is revolved about the axis and the nozzle is a ring. On, it is ' +
+          'extruded across a span and the nozzle is a slot, which is what a linear aerospike ' +
+          'is. Away from the ends that flow has no curvature, so a planar slice is the right ' +
+          'model for it rather than an approximation. Throat and exit radii become heights, ' +
+          'and the expansion ratio becomes their ratio rather than the square of it.' },
+   { k:'spanW', t:'Span', min:1, max:20000, step:1, v:200, unit:'mm', rebuild:true,
+     hint:'Linear geometry only. The width the slice is extruded across, which turns the ' +
+          'per-unit-depth solution into forces. Throat area is throat height times this.' },
    { k:'contractRatio', t:'Chamber contraction ratio', min:1.2, max:15, step:0.1, v:4,
      hint:'Plug nozzles only. The chamber is an annulus around the centrebody, so its radius ' +
           'is not free: the inner wall is fixed by the spike root and the turn, and the outer ' +
@@ -403,6 +412,12 @@ const R_UNIVERSAL = 8314.462618;                 // J/(kmol K), so R = R_u / M w
 const molarMass = R => R_UNIVERSAL / R;
 
 /* The atmosphere, which is a different gas from the exhaust. */
+/* Flow area for a given throat or exit radius, which is a height in a planar slice. Everything
+   downstream is geometry-agnostic: the area-Mach relation, c*, the thrust coefficient and the
+   choked mass flow all take an area and do not care how it was swept out. */
+const throatArea = r => P.planar ? r * P.spanW : Math.PI * r * r;
+const refArea    = r => P.planar ? r * P.spanW : Math.PI * r * r;
+
 const dryMass = () => Math.pow(10, P.dryMassLog);
 const propMass = () => Math.pow(10, P.propMassLog);
 const flightSpeed = () => P.accelerate ? S.vFlight : P.vAmb;
@@ -481,7 +496,8 @@ function computeGeometry(){
     : 0;
   const plugChamR  = SPK ? spikeR0 + turnR * (1 - Math.cos(SPK.delta)) : 0;
   const chamR      = SPK
-    ? Math.sqrt(plugChamR * plugChamR + contract / Math.PI)
+    ? (P.planar ? plugChamR + P.contractRatio * throatR
+                : Math.sqrt(plugChamR * plugChamR + contract / Math.PI))
     : P.chamR;
 
   const bodyR    = Math.max(chamR, nozExitR) + P.wallT;
@@ -555,7 +571,8 @@ function computeGeometry(){
     let best = Infinity;
     for (let i = 0; i < PLUG_N; i++){
       if (plugOut[i] < 0) break;
-      const a = Math.PI * (plugOut[i]*plugOut[i] - plugIn[i]*plugIn[i]);
+      const a = P.planar ? (plugOut[i] - plugIn[i]) * P.spanW
+                         : Math.PI * (plugOut[i]*plugOut[i] - plugIn[i]*plugIn[i]);
       if (a < best){ best = a; plugThroatZ = plugZ0 + (plugZ1 - plugZ0) * i / (PLUG_N - 1); }
     }
   }
@@ -630,7 +647,7 @@ function machFromNu(nu, g){
   return 0.5 * (lo + hi);
 }
 function spikeContour(rt, re, g){
-  const At = Math.PI * rt * rt, eps = (re / rt) * (re / rt);
+  const At = throatArea(rt), eps = throatArea(re) / At;
   const Me = machFromArea(eps, g), nue = nuPM(Me, g);
   /* Split the expansion. Everything up to nu_i happens inside an annular duct between the
      cowl and the spike, and the fan at the lip does the rest. For a modest expansion ratio
@@ -644,9 +661,21 @@ function spikeContour(rt, re, g){
   for (let i = 0; i <= K; i++){
     const M = Math.max(Mi + (Me - Mi) * (i / K), Mi, 1 + 1e-9);
     const mu = Math.asin(1 / M), alpha = nue - nuPM(M, g) + mu;
-    const r2 = re*re - At * areaRatio(M, g) * Math.sin(alpha) / (Math.PI * Math.sin(mu));
-    const r = Math.sqrt(Math.max(r2, 0));
-    pts.push([(re - r) / Math.tan(alpha), r]);        // axial offset from the lip, radius
+    let r, dz;
+    if (P.planar){
+      /* Extruded, mass conservation across the characteristic is a length rather than an
+         area: the flow crosses a line of length L at angle mu to it, so L*sin(mu) is the
+         throat height times the area ratio. The contour is then that length stepped off from
+         the lip along the characteristic. */
+      const L = rt * areaRatio(M, g) / Math.sin(mu);
+      r = re - L * Math.sin(alpha);
+      dz = L * Math.cos(alpha);
+    } else {
+      const r2 = re*re - At * areaRatio(M, g) * Math.sin(alpha) / (Math.PI * Math.sin(mu));
+      r = Math.sqrt(Math.max(r2, 0));
+      dz = (re - r) / Math.tan(alpha);
+    }
+    pts.push([dz, Math.max(r, 0)]);                  // axial offset from the lip, height
   }
   const zRootRel = pts[0][0], zTipRel = pts[K][0];
   const full = Math.max(zTipRel - zRootRel, 1e-6);
@@ -674,10 +703,19 @@ function spikeContour(rt, re, g){
      the width, so the two are solved together. A handful of iterations is plenty: each one
      moves the radius by a fraction of a percent. */
   let hThroat = hMouth, R = SPIKE_TURN * hThroat;
-  for (let i = 0; i < 40; i++){
-    const chamInner = r0 + R * (1 - Math.cos(delta));
-    hThroat = Math.sqrt(chamInner * chamInner + At / Math.PI) - chamInner;
-    R = SPIKE_TURN * Math.max(hThroat, 1e-6);
+  if (P.planar){
+    /* A slot's height does not depend on where it sits, so the throat is simply the height
+       the controls ask for. That is the whole difference the user sees: revolved, the throat
+       is forced to At/(2*pi*r) and gets thinner the larger the engine's exit is; extruded, it
+       is a free parameter and the span carries the area instead. */
+    hThroat = rt;
+    R = SPIKE_TURN * hThroat;
+  } else {
+    for (let i = 0; i < 40; i++){
+      const chamInner = r0 + R * (1 - Math.cos(delta));
+      hThroat = Math.sqrt(chamInner * chamInner + At / Math.PI) - chamInner;
+      R = SPIKE_TURN * Math.max(hThroat, 1e-6);
+    }
   }
   return { Me, nue, nui, Mi, epsI, delta, r0, zRootRel, full, table,
            h: hThroat, hMouth, R };
@@ -717,7 +755,10 @@ function derived(){
   // atmosphere enters only as the back pressure it has to expand against.
   const E = env(), X = exhaust(), g = X.g, Rg = X.Rg;
   const { rt, re } = nozzleRadii();
-  const At = Math.PI * rt * rt, Ae = Math.PI * re * re;      // mm²
+  /* Revolved, a radius r gives an area pi*r^2; extruded across a span it gives r*W. The same
+     two controls therefore mean a radius in one geometry and a height in the other, and the
+     expansion ratio is the square of their ratio in one and the ratio itself in the other. */
+  const At = throatArea(rt), Ae = throatArea(re);            // mm²
   const eps = Ae / At;
   const pc = P.pcBar * 1e5, Tc = P.Tc;
 
@@ -1125,7 +1166,8 @@ function consumeProbeArr(buf, t){
     if (M > machMax) machMax = M;
     const ra = rLo(ir), rb = rHi(ir), rc = 0.5 * (ra + rb);
     if (rc > rLim) continue;
-    const dA = Math.PI * (rb * rb - ra * ra) * 1e-6;         // mm² -> m², exact for the ring
+    const dA = (P.planar ? (rb - ra) * P.spanW
+                        : Math.PI * (rb * rb - ra * ra)) * 1e-6;   // mm² -> m², exact either way
     mdot    += rho * uz * Y * dA;                             // kg/s of propellant
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
     thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
@@ -1581,7 +1623,7 @@ struct Params {
   vehF  : vec4<f32>,          // centrebody radius in the chamber, throat slope, chamberR, turn R
   vehG  : vec4<f32>,          // z where the turn begins, radius of its centre, throat gap,
                               //   first z of the tabulated plug walls
-  vehH  : vec4<f32>,          // last z of those walls, _, _, _
+  vehH  : vec4<f32>,          // last z of those walls, planar flag, span, _
 };
 @group(0) @binding(0) var<uniform> P : Params;
 /* Plug-nozzle contour, resampled onto a uniform axial grid so the lookup is constant time:
@@ -1739,7 +1781,8 @@ function packParams(slot, dt, weight, simT){
   F[o+54] = GEO.chamR;     F[o+55] = GEO.turnR || 0;
   F[o+56] = GEO.zArc || 0; F[o+57] = GEO.arcOr || 0;
   F[o+58] = GEO.turnGap || 0; F[o+59] = GEO.plugZ0 || 0;
-  F[o+60] = GEO.plugZ1 || 1;  F[o+61] = 0; F[o+62] = 0; F[o+63] = 0;
+  F[o+60] = GEO.plugZ1 || 1;  F[o+61] = P.planar ? 1 : 0;
+  F[o+62] = P.spanW;          F[o+63] = 0;
 }
 </script>
 
@@ -1909,6 +1952,13 @@ fn gmIdx(iz : i32, ir : i32) -> u32 {
 fn rNode(iz : i32, ir : i32) -> f32 { return CUT[gmIdx(iz, ir)].w; }
 fn zNode(iz : i32) -> f32 { return f32(iz) * P.d.x; }
 
+/* Everything below is written once and weighted here. Revolved about the axis a face at
+   radius r has area proportional to r; extruded across a span it does not, so the weight is
+   one. The well-balanced pressure terms in the update need no special case either way: for a
+   closed contour the face normals sum to zero and their radial components sum to the planar
+   area, and both identities hold under either weighting. */
+fn isPlanar() -> bool { return P.vehH.y > 0.5; }
+
 /* Radial extent of a cell, and the radius of its centroid. */
 fn cellHr(iz : i32, ir : i32) -> f32 {
   return 0.5 * ((rNode(iz, ir + 1) - rNode(iz, ir)) + (rNode(iz + 1, ir + 1) - rNode(iz + 1, ir)));
@@ -1921,18 +1971,24 @@ fn cellR(iz : i32, ir : i32) -> f32 {
   return (h0 * m0 + h1 * m1) / max(h0 + h1, 1e-12);
 }
 /* Volume of the revolved cell, and the planar area it is swept from, both without the 2*pi. */
-fn cellVol(iz : i32, ir : i32) -> f32 { return cellR(iz, ir) * P.d.x * cellHr(iz, ir); }
+fn cellVol(iz : i32, ir : i32) -> f32 {
+  let w = select(cellR(iz, ir), 1.0, isPlanar());
+  return w * P.d.x * cellHr(iz, ir);
+}
 fn cellArea(iz : i32, ir : i32) -> f32 { return P.d.x * cellHr(iz, ir); }
 
 /* Area of the axial face at station iz spanning ir..ir+1, without the 2*pi. Its normal is +z. */
 fn faceAz(iz : i32, ir : i32) -> f32 {
   let r0 = rNode(iz, ir); let r1 = rNode(iz, ir + 1);
+  if (isPlanar()) { return r1 - r0; }
   return 0.5 * (r1 * r1 - r0 * r0);
 }
 /* The radial face at ir spanning iz..iz+1: area without the 2*pi, and its unit normal. */
 fn faceArArea(iz : i32, ir : i32) -> f32 {
   let dR = rNode(iz + 1, ir) - rNode(iz, ir);
-  return 0.5 * (rNode(iz, ir) + rNode(iz + 1, ir)) * sqrt(P.d.x * P.d.x + dR * dR);
+  let L = sqrt(P.d.x * P.d.x + dR * dR);
+  if (isPlanar()) { return L; }
+  return 0.5 * (rNode(iz, ir) + rNode(iz + 1, ir)) * L;
 }
 fn faceArN(iz : i32, ir : i32) -> vec2<f32> {
   let dR = rNode(iz + 1, ir) - rNode(iz, ir);
@@ -2363,16 +2419,18 @@ fn geomFrac(@builtin(global_invocation_id) g : vec3<u32>) {
     let lo = mix(R00, R10, fa); let hi = mix(R01, R11, fa);
     for (var b = 0; b < SUB; b++) {
       let r = mix(lo, hi, (f32(b) + 0.5) / f32(SUB));
-      vden = vden + r;                          // radius weighting: the cell is revolved
-      vnum = vnum + r * openAt(z, r);
+      let w = select(r, 1.0, isPlanar());        // revolved cells weight by radius, slices do not
+      vden = vden + w;
+      vnum = vnum + w * openAt(z, r);
     }
   }
   // +z face: the annulus at z0 + dz, from R10 to R11, radius-weighted
   var znum = 0.0; var zden = 0.0;
   for (var b = 0; b < SUB; b++) {
     let r = mix(R10, R11, (f32(b) + 0.5) / f32(SUB));
-    zden = zden + r;
-    znum = znum + r * openAt(z0 + dz, r);
+    let w = select(r, 1.0, isPlanar());
+    zden = zden + w;
+    znum = znum + w * openAt(z0 + dz, r);
   }
   // +r face: follows the mapping from (z0, R01) to (z0 + dz, R11)
   var rnum = 0.0;
@@ -2445,7 +2503,9 @@ fn forceGather(@builtin(global_invocation_id) g : vec3<u32>) {
       let k = cIdx(kz, ir);
       let w = toPrim(Ua[k], Da[k]);
       // geometry is in millimetres and pressure in pascals, so the area needs converting
-      fz = fz + sgn * (w.w.w - pa) * PI * (rb * rb - ra * ra) * 1.0e-6;
+      var area = PI * (rb * rb - ra * ra);
+      if (isPlanar()) { area = (rb - ra) * P.vehH.z; }
+      fz = fz + sgn * (w.w.w - pa) * area * 1.0e-6;
     }
   }
   probeB[u32(8 * P.cells.y) + u32(iz)] = fz;
@@ -4420,7 +4480,7 @@ async function vRunTo(tEnd, budgetMs){
 /* Largest revolved area of a surface spanning the passage, minimised over all such surfaces.
    For a plug nozzle this has to come out at the design throat area or the contour is wrong. */
 function vMinPassage(){
-  const G = GEO, At = Math.PI * G.throatR * G.throatR;
+  const G = GEO, At = throatArea(G.throatR);
   if (!G.plugIn) return 1;
   const N = PLUG_N, z = i => G.plugZ0 + (G.plugZ1 - G.plugZ0) * i / (N - 1);
   // the walls as they are actually built, so this measures the geometry rather than a formula
@@ -4433,7 +4493,8 @@ function vMinPassage(){
   for (const [zc, rc] of outer)
     for (const [zs, rs] of inner){
       if (rs >= rc) continue;
-      const a = Math.PI * (rc + rs) * Math.hypot(zc - zs, rc - rs);
+      const L = Math.hypot(zc - zs, rc - rs);
+      const a = P.planar ? L * P.spanW : Math.PI * (rc + rs) * L;
       if (a < best) best = a;
     }
   return best / At;
@@ -4537,7 +4598,7 @@ async function buildDecks(report){
       P.accelerate = 0; P.vAmb = machs[i] * aRef;
       syncSliders(); buildGrid(); pendingRebuild = false;
       if (!await vRunToSteady(120000)) throw new Error('drag point ' + (i+1) + ' did not settle');
-      const E = env(), A = Math.PI * GEO.bodyR * GEO.bodyR * 1e-6;
+      const E = env(), A = refArea(GEO.bodyR) * 1e-6;
       const q = 0.5 * E.rhoA * E.vInf * E.vInf;
       DECK.mach.push(machs[i]);
       DECK.cd.push(q > 1e-9 ? S.meas.drag / (q * A) : 0);
@@ -4791,7 +4852,7 @@ vAdd('Flat nose at Mach 2: drag coefficient', 'slow', async () => {
   vSetPreset('Supersonic flight', { noseType:0 });
   if (!await vRunTo(2.0, 90000)) return { got:NaN, want:1.5, lo:-0.2, hi:0.2, unit:'C_D' };
   const d = derived(), m = S.meas;
-  const A = Math.PI * GEO.bodyR * GEO.bodyR * 1e-6;
+  const A = refArea(GEO.bodyR) * 1e-6;
   return { got:m.drag / (0.5 * d.rhoAmb * d.vInf * d.vInf * A), want:1.5, lo:-0.2, hi:0.2, unit:'C_D' };
 });
 vAdd('Uniform ambient integrates to zero drag', 'slow', async () => {
