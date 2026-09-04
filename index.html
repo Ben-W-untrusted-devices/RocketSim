@@ -29,7 +29,31 @@
   #legend{position:absolute; left:10px; bottom:8px; pointer-events:none;
           width:220px; height:38px}
   #bottom{flex:0 0 190px; display:flex; gap:10px; align-items:stretch; min-height:190px}
-  #plotBox{flex:1 1 auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 8px}
+  #plotBox{flex:1 1 auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:8px; padding:6px 8px; display:flex; flex-direction:column; min-width:0}
+  #plotHead{display:flex; align-items:baseline; gap:8px}
+  #plotHead #plotTitle{flex:1 1 auto; min-width:0}
+  #serPick{position:relative; flex:0 0 auto}
+  #serPick > summary{cursor:pointer; list-style:none; font-size:11px; color:var(--accent);
+    border:1px solid var(--line); border-radius:4px; padding:1px 7px; user-select:none;
+    white-space:nowrap}
+  #serPick > summary::-webkit-details-marker{display:none}
+  #serPick > summary::after{content:" \25be"}
+  #serPick[open] > summary{border-color:var(--accent)}
+  /* the plot sits at the foot of the window, so the list opens upward */
+  #serPick .pop{position:absolute; z-index:40; bottom:100%; left:0; margin-bottom:4px;
+    background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:6px;
+    max-height:320px; overflow:auto; box-shadow:0 6px 18px rgba(0,0,0,.5); min-width:230px}
+  #serPick .pop label{display:flex; align-items:center; gap:6px; padding:2px 3px;
+    font-size:11px; white-space:nowrap; border-radius:3px; cursor:pointer}
+  #serPick .pop label:hover{background:rgba(255,255,255,.05)}
+  #serPick .pop .sw{width:9px; height:9px; border-radius:2px; flex:0 0 auto}
+  #serPick .pop .un{color:var(--dim); margin-left:auto; padding-left:10px}
+  #serPick .pop .row{display:flex; gap:6px; margin-bottom:5px}
+  #serPick .pop .row button{flex:1 1 auto; font-size:10px; padding:2px}
+  #plotKey{display:flex; flex-wrap:wrap; gap:2px 12px; font-size:10px; color:var(--dim);
+    margin-top:2px; min-height:12px}
+  #plotKey b{font-weight:600}
   #plot{width:100%; height:110px; display:block}
   #plotTitle{font:11px var(--mono); color:var(--dim); margin-bottom:2px}
   #metrics{flex:0 0 330px; background:var(--panel); border:1px solid var(--line);
@@ -113,8 +137,12 @@
   </div>
   <div id="bottom">
     <div id="plotBox">
-      <div id="plotTitle"></div>
+      <div id="plotHead">
+        <details id="serPick"><summary>Series</summary><div class="pop" id="serList"></div></details>
+        <div id="plotTitle"></div>
+      </div>
       <canvas id="plot"></canvas>
+      <div id="plotKey"></div>
     </div>
     <div id="metrics"></div>
   </div>
@@ -272,13 +300,17 @@ const CONTROLS = [
    { k:'kickAngle', t:'Pitch-over angle',  min:0.5, max:30, step:0.5, v:5, unit:'°',
      hint:'Angle from vertical applied at the pitch-over. Thereafter dγ/dt = −g·cos γ / v, so ' +
           'the turn rate rises as the vehicle slows.' },
-   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:5, step:0.01, v:0.3, log:true, unit:'kg',
+   { k:'dryMassLog',  t:'Dry mass',    min:-1, max:5, step:0.01, v:1.08, log:true, unit:'kg',
      hint:'0.1 kg to 100 tonnes, so a real vehicle fits. The trajectory is a ' +
           'point mass, and only the ratio of thrust to weight and the frontal area reach it, ' +
           'so mass need not match the drawn geometry.' },
-   { k:'propMassLog', t:'Propellant mass', min:-1, max:5, step:0.01, v:0, log:true, unit:'kg',
+   { k:'propMassLog', t:'Propellant mass', min:-1, max:5, step:0.01, v:0.9, log:true, unit:'kg',
      hint:'Burn time is this divided by the measured mass flow. There is no consumption-rate ' +
           'input because the mass flow is an output of the solver.' },
+   { k:'ffAuto', t:'Choose the fast-forward automatically', kind:'check', v:1,
+     hint:'Holds the fast-forward at the largest value the quasi-steady coupling supports, so ' +
+          'the trajectory advances as fast as it can without the flow field falling behind ' +
+          'the conditions it is being read at. Off, the figure below is used as given.' },
    { k:'ffLog',    t:'Trajectory fast-forward', min:0, max:6, step:0.05, v:1.3, log:true,
      unit:'×',
      hint:'Ratio of flight time to flow time. At 1× they advance together. The flow settles ' +
@@ -322,7 +354,7 @@ const CONTROLS = [
    { k:'spf',       t:'Steps / frame (manual)', min:1, max:800, step:1,  v:120,
      hint:'Used only when auto-pacing is off.' },
  ]},
- { group:'Video export', items:[
+ { group:'Export', items:[
    { k:'vidFlight',     t:'Flow time to record', min:0.1, max:100, step:0.1, v:6, unit:'ms' },
    { k:'vidMsPerFrame', t:'Flow time per frame', min:0.002, max:1, step:0.002, v:0.02, unit:'ms',
      hint:'Fixed for every frame, subdivided into as many equal sub-steps as stability ' +
@@ -540,6 +572,32 @@ function spikeContour(rt, re, g){
 const machFromPressureRatio = (p0OverP, g) =>
   Math.sqrt(Math.max(0, 2 / (g - 1) * (Math.pow(p0OverP, (g - 1) / g) - 1)));
 
+/* Largest fast-forward the quasi-steady coupling supports. The flow needs about 2 ms to
+   settle; over that window the airspeed must not move by more than a twentieth of the scale
+   the flow responds to, and neither must the ambient pressure. Solving that for the ratio
+   gives the value below, which is what the auto mode holds it at. */
+const SETTLE_MS = 2.0;
+const FF_BUDGET = 0.10;              // trajectory error the automatic mode aims at
+/* Fraction of the scale the flow responds to that the boundary conditions move through while
+   it settles. Measured against the V-2 case this tracks the error in apogee closely: 5.6% here
+   came out as 6% high on apogee, so it is quoted as an error estimate rather than a verdict. */
+function ffError(ff, accel, vInf, aAmb){
+  const settleS = SETTLE_MS * 1e-3 * ff;
+  const fV = Math.abs(accel) * settleS / Math.max(vInf, aAmb, 1);
+  const fP = climbing() ? (vInf * settleS) / Math.max(scaleHeight(), 1e-9) : 0;
+  return Math.max(fV, fP);
+}
+function ffLimit(accel, vInf, aAmb, budget){
+  const unit = ffError(1, accel, vInf, aAmb);
+  if (!(unit > 0)) return 1e6;
+  return (budget === undefined ? FF_BUDGET : budget) / unit;
+}
+function fastForward(accel, vInf, aAmb){
+  const manual = Math.pow(10, P.ffLog);
+  if (!P.accelerate || !P.ffAuto) return manual;
+  return Math.min(1e6, Math.max(1, ffLimit(accel, vInf, aAmb)));
+}
+
 function derived(){
   // The nozzle flows pure exhaust, so all of the 1-D theory uses the exhaust gas. The
   // atmosphere enters only as the back pressure it has to expand against.
@@ -611,7 +669,7 @@ function derived(){
            Me_M:molarMass(Rg), amb_M:molarMass(E.Rg), ambG:E.g, ambR:E.Rg,
            machInf:E.machInf, aAmb:E.aA, rhoAmb:E.rhoA, vInf:E.vInf,
            burnTime, massFull, massNow, netF, accel, deltaV, mdotUse, Fmeas, Dmeas,
-           twr, gUse, H:scaleHeight(), ff:Math.pow(10, P.ffLog),
+           twr, gUse, H:scaleHeight(), ff:fastForward(accel, E.vInf, E.aA),
            fpaDeg: S.fpa * 180 / Math.PI,
            spike:isSpike(), spikeR0:GEO.spikeR0 || 0, spikeBaseR:GEO.spikeBaseR || 0,
            spikeBuilt:GEO.spikeBuilt || 0, spikeNue:GEO.spikeNue || 0,
@@ -701,12 +759,13 @@ const PRESETS = [
        pcBar:206, throatR:137, nozExitR:1138, chamR:170, chamLen:450, convLen:260, divLen:2900,
        nozShape:1, noseType:2, noseLen:1200, foreLen:1500, wallT:15,
        res:112, rDomain:2.0, downrange:6000 } },
- { n:'XRS-2200', d:'X-33 aerospike, hydrolox, 58 bar, ε 58. Annular here; the engine was linear',
+ { n:'XRS-2200', d:'X-33 aerospike, hydrolox, 58 bar, ε 58. Annular here, and past what this ' +
+      'grid resolves: the warning it raises is expected',
    p:{ gammaE:1.22, RgasE:693, Tc:3400, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0,
        pcBar:58, throatR:188, nozExitR:1432, chamR:500, chamLen:600, convLen:900,
        nozShape:2, spikeTrunc:100, noseType:2, noseLen:1500, foreLen:2000, wallT:25,
-       res:256, rDomain:1.5, downrange:6000 } },
+       res:192, rDomain:1.5, downrange:6000 } },
  { n:'Traveler IV', d:'USC RPL 2019, first student rocket past the Karman line',
    p:{ gammaE:1.18, RgasE:308, Tc:3200, gammaA:1.40, RgasALog:LOG10(287), pAmbLog:LOG10(101.3),
        tAmb:288, vAmb:0, gSurf:9.81,
@@ -934,8 +993,47 @@ function consumeProbeArr(buf, t){
   S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag,
              net: thrust - drag, rLim };
   if (mx > S.peak){ S.peak = mx; S.peakT = t; }
-  S.series.push([t, axis, mx]);
-  if (S.series.length > 4000) S.series.splice(0, 2000);
+  recordSeries(t);
+}
+
+/* ---- recorded time series --------------------------------------------------------
+   One row per measurement, holding everything the plot or an exported CSV might want. The
+   first column is flow time and the rest follow SERIES in order. */
+const SERIES = [
+  { k:'axis',    t:'axial velocity, on-axis',      u:'m/s', c:'#5ec6ff', on:true },
+  { k:'mx',      t:'axial velocity, plane maximum',u:'m/s', c:'#ffb454', on:true },
+  { k:'machMax', t:'peak Mach at the plane',       u:'',    c:'#ffa657' },
+  { k:'Taxis',   t:'temperature, on-axis',         u:'K',   c:'#ff7b72' },
+  { k:'thrust',  t:'thrust',                       u:'N',   c:'#7ee787' },
+  { k:'drag',    t:'drag',                         u:'N',   c:'#ff6b6b' },
+  { k:'net',     t:'net axial force',              u:'N',   c:'#d2a8ff' },
+  { k:'mdot',    t:'propellant mass flow',         u:'g/s', c:'#79c0ff' },
+  { k:'ispM',    t:'effective Isp, measured',      u:'s',   c:'#a5d6ff' },
+  { k:'pc',      t:'chamber pressure',             u:'bar', c:'#f0883e' },
+  { k:'pa',      t:'ambient pressure',             u:'kPa', c:'#bc8cff' },
+  { k:'flightT', t:'flight time',                  u:'s',   c:'#6e7681' },
+  { k:'vFlight', t:'airspeed',                     u:'m/s', c:'#e3b341' },
+  { k:'mach',    t:'flight Mach number',           u:'',    c:'#f778ba' },
+  { k:'accel',   t:'acceleration',                 u:'g',   c:'#db6d28' },
+  { k:'alt',     t:'altitude',                     u:'km',  c:'#56d364' },
+  { k:'range',   t:'downrange',                    u:'km',  c:'#39c5cf' },
+  { k:'fpa',     t:'flight path angle',            u:'deg', c:'#a371f7' },
+  { k:'mass',    t:'vehicle mass',                 u:'kg',  c:'#8b949e' },
+  { k:'propLeft',t:'propellant remaining',         u:'kg',  c:'#c9d1d9' },
+];
+const SERIES_ON = new Set(SERIES.filter(x => x.on).map(x => x.k));
+
+function recordSeries(t){
+  const m = S.meas, D = derived();
+  const row = [t,
+    m.axis, m.mx, m.machMax, m.Taxis,
+    m.thrust, m.drag, m.net, m.mdot * 1000,
+    m.mdot > 1e-9 ? (m.thrust / m.mdot) / G0 : 0,
+    chamberState(t).p / 1e5, pAmbPa() / 1000,
+    S.flightT, D.vInf, D.machInf, D.accel / G0,
+    S.alt / 1000, S.range / 1000, D.fpaDeg, D.massNow, S.propLeft];
+  S.series.push(row);
+  if (S.series.length > 6000) S.series.splice(0, 3000);
 }
 
 /* ========================== rendering ========================== */
@@ -954,6 +1052,17 @@ window.addEventListener('resize', () => { if (S.Nz) resizeCanvas(); });
 const render = () => compRender();
 
 /* ========================== metrics ========================== */
+/* The metrics panel and the plot caption are rewritten several times a second, which
+   destroys any selection the moment it is made. While a selection is live inside one of them,
+   leave it alone. */
+function selectionInside(el){
+  if (!el) return false;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  const n = sel.anchorNode;
+  return !!n && el.contains(n.nodeType === 1 ? n : n.parentNode);
+}
+
 const fmt = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
 const fmtP = pa => pa >= 1e5 ? (pa/1e5).toFixed(2) + ' bar'
                  : pa >= 1e3 ? (pa/1e3).toFixed(2) + ' kPa'
@@ -993,12 +1102,15 @@ function updateMetrics(){
       ? ` Truncated to ${fmt(P.spikeTrunc,0)}%, so a base of radius ${fmt(D.spikeBaseR,2)} mm ` +
         `carries recirculating gas whose pressure adds to or subtracts from thrust.`
       : ``)]);
-  else if (D.peRatio < 0.35) flags.push(['bad',
+  else if (D.peRatio < 0.35) flags.push(['warn',
     `<b>Heavily over-expanded; separation expected.</b> Exit pressure is ${fmt(D.peRatio,2)}× ` +
     `ambient. Below about 0.35 (Summerfield) the boundary layer separates and the shock system ` +
-    `moves inside the nozzle, which is a structural load as well as a loss. The ideal thrust ` +
-    `below assumes the nozzle flows full and is therefore optimistic. Optimum exit radius at ` +
-    `this ambient pressure is ${fmt(D.reOpt,1)} mm (ε = ${fmt(D.epsOpt,1)}).`]);
+    `sits inside the nozzle, which is a structural load as well as a loss. This is a real ` +
+    `operating condition rather than a mistake: an engine sized for vacuum and lit on the pad ` +
+    `runs here by design, and the RS-25 did so at ${fmt(D.eps,0)}:1 for every Shuttle launch. ` +
+    `What it does mean is that the ideal figures below assume the nozzle flows full, so they ` +
+    `are optimistic, and that the measured block is the one to read. Optimum exit radius at ` +
+    `this ambient pressure would be ${fmt(D.reOpt,1)} mm (ε = ${fmt(D.epsOpt,1)}).`]);
   else if (D.peRatio < 0.8) flags.push(['warn',
     `Over-expanded: exit pressure ${fmt(D.peRatio,2)}× ambient. Attached, with oblique shocks ` +
     `at the lip. Optimum exit radius here is ${fmt(D.reOpt,1)} mm.`]);
@@ -1081,19 +1193,27 @@ function updateMetrics(){
     /* Quasi-steady check. The flow needs roughly 2 ms to settle; if the boundary conditions
        move appreciably in that window, thrust and drag are being read off a flow field that is
        chasing a target it never reaches. Velocity and ambient pressure both count. */
-    const settleS = 2.0e-3 * D.ff;
+    const settleS = SETTLE_MS * 1e-3 * D.ff;
     const dv = Math.abs(D.accel) * settleS;
     const fV = dv / Math.max(D.vInf, D.aAmb);
     const fP = climbing() ? (D.vInf * settleS) / Math.max(D.H, 1e-9) : 0;
     const frac = Math.max(fV, fP);
-    if (frac > 0.05) flags.push(['bad',
-      `<b>Quasi-steady assumption violated.</b> At ${fmt(D.ff,0)}× fast-forward, ` +
-      `${fmt(settleS,2)} s of flight elapse in the 2 ms the flow needs to settle. In that ` +
-      `window the airspeed changes by ${fmt(dv,0)} m/s` +
+    /* Reported as a figure in the block below whatever its size; flagged only once it is large
+       enough to change the answer rather than merely blur it. */
+    if (frac > 0.25) flags.push([P.ffAuto ? 'warn' : 'bad',
+      `<b>Trajectory error is large.</b> At ${fmt(D.ff,0)}× fast-forward, ` +
+      `${fmt(settleS,2)} s of flight elapse in the ${fmt(SETTLE_MS,0)} ms the flow needs to ` +
+      `settle. In that window the airspeed changes by ${fmt(dv,0)} m/s` +
       (fP > fV ? ` and ambient pressure by ${fmt(fP*100,0)}%` : '') +
-      `, or ${fmt(frac*100,0)}% of the scale the flow responds to. Thrust and drag are being ` +
-      `read from a flow field that has not converged to the current conditions. Reduce ` +
-      `<b>trajectory fast-forward</b>.`]);
+      `, or ${fmt(frac*100,0)}% of the scale the flow responds to, so thrust and drag are ` +
+      `being read from a flow field that has not caught up. Against the V-2 case this figure ` +
+      `tracked the error in apogee closely.` +
+      (P.ffAuto
+        ? ` The fast-forward is already on automatic; it cannot go lower without the run ` +
+          `taking proportionally longer, since a burn of seconds has to be paid for in ` +
+          `milliseconds of flow.`
+        : ` Turn on <b>choose the fast-forward automatically</b>, or set it to ` +
+          `${fmt(ffLimit(D.accel, D.vInf, D.aAmb), 0)}× or less by hand.`)]);
   }
 
   flags.push(['warn',
@@ -1117,6 +1237,7 @@ function updateMetrics(){
   const critical = flags.filter(f => f[0] === 'bad');
   const rest     = flags.filter(f => f[0] !== 'bad');
 
+  if (selectionInside(DOM.metrics)) return;
   DOM.metrics.innerHTML =
     critical.map(([c,t]) => `<div class="flag ${c}">${t}</div>`).join('') +
     rows('Nozzle, 1-D ideal', [
@@ -1190,7 +1311,9 @@ function updateMetrics(){
       ['Isp, measured', fmt(D.mdotUse > 0 ? D.Fmeas/(D.mdotUse*G0) : 0,0) + ' s'],
       ['Δv, ideal',     fmt(D.deltaV,0) + ' m/s'],
     ] .concat(P.accelerate ? [
-      ['flight time T+', fmt(S.flightT,2) + ' s  (' + fmt(D.ff,0) + '× flow)'],
+      ['flight time T+', fmt(S.flightT,2) + ' s  (' + fmt(D.ff,0) + '× flow' +
+                        (P.ffAuto ? ', auto' : '') + ')'],
+      ['trajectory error', fmt(100 * ffError(D.ff, D.accel, D.vInf, D.aAmb), 0) + '% estimated'],
       ['propellant left',fmt(100*S.propLeft/Math.max(propMass(),1e-9),0) + '%'],
     ] : []).concat(climbing() ? [
       ['altitude gained',fmt(S.alt/1000,2) + ' km'],
@@ -2503,7 +2626,8 @@ function compSteps(n){
 function advanceFlight(simmedMs){
   const m = S.meas;
   if (!m) return;
-  const dtF = simmedMs * 1e-3 * Math.pow(10, P.ffLog);   // ms of flow -> s of flight
+  // the same ratio the panel reports, so the automatic mode actually steers the integration
+  const dtF = simmedMs * 1e-3 * derived().ff;           // ms of flow -> s of flight
   const mass = Math.max(dryMass() + S.propLeft, 1e-6);
   const g = climbing() ? P.gSurf : 0;
 
@@ -2529,7 +2653,10 @@ function advanceFlight(simmedMs){
   const v = S.vFlight + (netF / mass - g * sinF) * dtF;
   // The solver represents nose-first flight only, so a vertical climb terminates at apogee
   // rather than reversing. Requires prior climb: a vehicle on the pad is also at zero airspeed.
-  if (climbing() && !turning() && S.vFlight > 1 && v <= 0) S.apogee = true;
+  if (climbing() && !turning() && S.vFlight > 1 && v <= 0){
+    S.apogee = true;
+    S.running = false;          // nothing past apogee is valid, so stop rather than run on
+  }
   S.vFlight = Math.max(0, v);
   if (turning() && S.vFlight > 1){
     S.fpa -= (g * Math.cos(S.fpa) / S.vFlight) * dtF;
@@ -2540,7 +2667,7 @@ function advanceFlight(simmedMs){
     S.range += S.vFlight * Math.cos(S.fpa) * dtF;
     S.altMax = Math.max(S.altMax, S.alt);
     // requires prior climb: a vehicle on the pad is also at zero altitude
-    if (S.altMax > 10 && S.alt <= 0){ S.alt = 0; S.impact = true; }
+    if (S.altMax > 10 && S.alt <= 0){ S.alt = 0; S.impact = true; S.running = false; }
   }
   if (S.propLeft > 0){
     S.propLeft = Math.max(0, S.propLeft - Math.max(m.mdot, 0) * dtF);
@@ -2669,36 +2796,114 @@ function drawLegend(scale){
 
 /* ========================== time-series plot ========================== */
 const plot = document.getElementById('plot'), pctx = plot.getContext('2d');
+/* The picker: a plain details/summary dropdown of checkboxes, one per recorded series. */
+function buildSeriesPicker(){
+  const host = document.getElementById('serList');
+  host.innerHTML =
+    `<div class="row"><button type="button" data-all="1">All</button>` +
+    `<button type="button" data-all="0">None</button>` +
+    `<button type="button" data-all="d">Default</button></div>` +
+    SERIES.map((x, i) =>
+      `<label><input type="checkbox" data-i="${i}"${x.on ? ' checked' : ''}>` +
+      `<span class="sw" style="background:${x.c}"></span><span>${x.t}</span>` +
+      `<span class="un">${x.u || '-'}</span></label>`).join('');
+  const sync = () => {
+    host.querySelectorAll('input[data-i]').forEach(cb => {
+      const k = SERIES[+cb.dataset.i].k;
+      cb.checked = SERIES_ON.has(k);
+      cb.toggleAttribute('checked', cb.checked);
+    });
+    drawPlot();
+  };
+  host.addEventListener('change', e => {
+    const cb = e.target.closest('input[data-i]');
+    if (!cb) return;
+    const k = SERIES[+cb.dataset.i].k;
+    if (cb.checked) SERIES_ON.add(k); else SERIES_ON.delete(k);
+    sync();
+  });
+  host.addEventListener('click', e => {
+    const b = e.target.closest('button[data-all]');
+    if (!b) return;
+    SERIES_ON.clear();
+    if (b.dataset.all === '1') SERIES.forEach(x => SERIES_ON.add(x.k));
+    else if (b.dataset.all === 'd') SERIES.filter(x => x.on).forEach(x => SERIES_ON.add(x.k));
+    sync();
+  });
+  // clicking away closes it, which is what a dropdown is expected to do
+  document.addEventListener('click', e => {
+    const d = document.getElementById('serPick');
+    if (d && d.open && !d.contains(e.target)) d.open = false;
+  });
+}
+
+/* Every series has its own units, so each is drawn against its own range and the key carries
+   the numbers. A single trace keeps a labelled axis, since then the scale is unambiguous. */
 function drawPlot(){
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = plot.clientWidth, h = plot.clientHeight;
   if (plot.width !== Math.round(w*dpr)){ plot.width = Math.round(w*dpr); plot.height = Math.round(h*dpr); }
   pctx.setTransform(dpr,0,0,dpr,0,0);
   pctx.clearRect(0,0,w,h);
-  DOM.plotTitle.textContent =
-    `axial velocity at the measurement plane, ${P.probe > 0 ? fmt(P.probe,0) + ' mm past the ' : 'at the '}` +
-    `nozzle exit, against flow time.   on-axis (cyan), plane maximum (orange)`;
+
+  const shown = SERIES.map((x, i) => ({ x, i: i + 1 })).filter(o => SERIES_ON.has(o.x.k));
+  if (!selectionInside(DOM.plotTitle)) DOM.plotTitle.textContent =
+    shown.length === 1
+      ? `${shown[0].x.t}, against flow time`
+      : `${shown.length} series against flow time, each to its own scale`;
 
   const ser = S.series;
-  if (ser.length < 2) return;
-  const t1 = Math.max(ser[ser.length-1][0], 1);
-  let vmaxP = 0.5;
-  for (const s of ser) vmaxP = Math.max(vmaxP, Math.abs(s[1]), Math.abs(s[2]));
-  const X = t => 34 + (w - 44) * (t / t1);
-  const Y = v => h - 16 - (h - 26) * (v / (vmaxP*1.08));
+  if (ser.length < 2 || !shown.length){
+    if (!selectionInside(DOM.plotKey)) DOM.plotKey.textContent =
+      shown.length ? '' : 'no series selected';
+    return;
+  }
+  const t1 = Math.max(ser[ser.length-1][0], 1e-6);
+  const X = t => 40 + (w - 50) * (t / t1);
+
+  // per-series range, so traces with different units can share the box
+  const rng = shown.map(o => {
+    let lo = Infinity, hi = -Infinity;
+    for (const row of ser){ const v = row[o.i];
+      if (Number.isFinite(v)){ if (v < lo) lo = v; if (v > hi) hi = v; } }
+    if (!Number.isFinite(lo)){ lo = 0; hi = 1; }
+    if (lo > 0) lo = 0;                      // keep zero in view for positive quantities
+    if (hi < 0) hi = 0;
+    if (hi - lo < 1e-12) hi = lo + 1;
+    return { lo, hi };
+  });
 
   pctx.strokeStyle = '#2b3440'; pctx.lineWidth = 1;
-  pctx.beginPath(); pctx.moveTo(X(0), Y(0)); pctx.lineTo(X(t1), Y(0)); pctx.stroke();
+  pctx.beginPath(); pctx.moveTo(40, h - 16); pctx.lineTo(X(t1), h - 16); pctx.stroke();
   pctx.fillStyle = '#8b97a6'; pctx.font = '10px ui-monospace, monospace';
-  pctx.fillText(fmt(vmaxP,1)+' m/s', 2, 12);
-  pctx.fillText('0', 22, Y(0)-2);
-  pctx.fillText(fmt(t1,0)+' ms', w-44, h-3);
+  pctx.fillText(fmt(t1,2)+' ms', w-46, h-3);
 
-  for (const [idx, colr] of [[1,'#5ec6ff'], [2,'#ffb454']]){
-    pctx.strokeStyle = colr; pctx.lineWidth = 1.4; pctx.beginPath();
-    ser.forEach((s,i) => { const x = X(s[0]), y = Y(s[idx]); i ? pctx.lineTo(x,y) : pctx.moveTo(x,y); });
-    pctx.stroke();
+  if (shown.length === 1){                   // one trace: label the axis properly
+    const r = rng[0];
+    pctx.fillText(fmt(r.hi,1), 2, 12);
+    pctx.fillText(fmt(r.lo,1), 2, h-18);
   }
+
+  shown.forEach((o, n) => {
+    const r = rng[n];
+    const Y = v => (h - 16) - (h - 26) * ((v - r.lo) / (r.hi - r.lo));
+    pctx.strokeStyle = o.x.c; pctx.lineWidth = 1.4; pctx.beginPath();
+    let started = false;
+    for (const row of ser){
+      const v = row[o.i];
+      if (!Number.isFinite(v)) continue;
+      const px = X(row[0]), py = Y(v);
+      if (started) pctx.lineTo(px, py); else { pctx.moveTo(px, py); started = true; }
+    }
+    pctx.stroke();
+  });
+
+  const last = ser[ser.length-1];
+  if (!selectionInside(DOM.plotKey)) DOM.plotKey.innerHTML = shown.map((o, n) =>
+    `<span style="color:${o.x.c}"><b>${o.x.t}</b> ${fmt(last[o.i], 2)}` +
+    (o.x.u ? ' ' + o.x.u : '') +
+    `<span style="color:var(--dim)"> (${fmt(rng[n].lo,1)} to ${fmt(rng[n].hi,1)})</span></span>`
+  ).join('');
 }
 
 </script>
@@ -3173,7 +3378,38 @@ async function runExport(fields){
 }
 
 const exportVideo = () => runExport([VIEW.field]);
-const exportAllFields = () => runExport(ALL_FIELDS);
+/* The recorded time series as CSV: one row per measurement, every column SERIES defines
+   whether or not it is currently plotted, so the file is useful for graphing elsewhere. */
+function seriesCsv(){
+  const head = ['flow_time_ms'].concat(SERIES.map(x =>
+    x.k + (x.u ? '_' + x.u.replace(/[^A-Za-z0-9]+/g, '') : '')));
+  const num = v => (Number.isFinite(v) ? (Math.abs(v) < 1e-4 && v !== 0
+                    ? v.toExponential(6) : String(Math.round(v * 1e6) / 1e6)) : '');
+  const lines = [head.join(',')];
+  for (const row of S.series) lines.push(row.map(num).join(','));
+  return lines.join('\n') + '\n';
+}
+function downloadText(name, text, mime){
+  const url = URL.createObjectURL(new Blob([text], { type: mime || 'text/plain' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+function exportSeriesCsv(){
+  if (!S.series.length){
+    const st = document.getElementById('expStatus');
+    if (st) st.textContent = 'Nothing recorded yet: run for a moment first.';
+    return false;
+  }
+  downloadText('rocketsim-series.csv', seriesCsv(), 'text/csv');
+  const st = document.getElementById('expStatus');
+  if (st) st.textContent = `Wrote ${S.series.length} rows, ${SERIES.length + 1} columns.`;
+  return true;
+}
+/* Exporting every field also writes the series, since the point of the batch is to come away
+   with everything the run produced rather than only the pictures. */
+const exportAllFields = async () => { exportSeriesCsv(); await runExport(ALL_FIELDS); };
 
 /* Labels go in the bands above and below the image, so nothing is drawn over the flow and
    no semi-transparent backing panel is needed. */
@@ -3233,7 +3469,8 @@ const UI = {};
 const DOM = { scalebar: document.getElementById('scalebar'),
               pause:    document.getElementById('pause'),
               metrics:  document.getElementById('metrics'),
-              plotTitle:document.getElementById('plotTitle') };
+              plotTitle:document.getElementById('plotTitle'),
+              plotKey:  document.getElementById('plotKey') };
 const host = document.getElementById('controls');
 const sliders = {};
 let pendingRebuild = false;
@@ -3462,7 +3699,7 @@ for (const g of CONTROLS){
 /* ---- export button, appended to the video section ---- */
 {
   const vid = [...host.querySelectorAll('details')]
-    .find(d => d.querySelector('summary').textContent.startsWith('Video'));
+    .find(d => d.querySelector('summary').textContent.trim() === 'Export');
   if (vid){
     const body = vid.querySelector('.body');
     const box = document.createElement('div');
@@ -3471,6 +3708,7 @@ for (const g of CONTROLS){
       <div class="btnrow">
         <button id="expBtn">Export video</button>
         <button id="expAllBtn">Export all fields</button>
+        <button id="expCsvBtn">Export series CSV</button>
       </div>
       <div class="pbar"><div id="pbarFill"></div></div>
       <div class="hint" id="expDerived"></div>
@@ -3486,6 +3724,7 @@ for (const g of CONTROLS){
     UI.fmtSel = fs;
     box.querySelector('#expBtn').addEventListener('click', exportVideo);
     box.querySelector('#expAllBtn').addEventListener('click', exportAllFields);
+    box.querySelector('#expCsvBtn').addEventListener('click', () => exportSeriesCsv());
     for (const k of ['vidFlight','vidMsPerFrame','vidFps'])
       sliders[k].inp.addEventListener('input', updateExportDerived);
   }
@@ -4104,6 +4343,7 @@ async function validate(tier){
 window.validate = validate;
 
 (async function boot(){
+  buildSeriesPicker();
   await wgpuInit();
   await compInit();
   applyStateFromURL();

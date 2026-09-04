@@ -61,10 +61,12 @@ rather than an exponent. Narrower controls stay as sliders, since dragging them 
 | Nozzle | throat radius, exit radius, converging and diverging lengths, conical / bell / aerospike, spike truncation |
 | Airframe | nose cone shape and length, forebody length, wall thickness |
 | Atmosphere | six worlds as buttons; ambient pressure (log, 10 Pa to 10 MPa), temperature, flight speed, surface gravity, γ and R directly |
-| Vehicle & flight | acceleration on/off, level / vertical / gravity-turn path, pitch-over speed and angle, dry and propellant mass, trajectory fast-forward |
+| Vehicle & flight | acceleration on/off, level / vertical / gravity-turn path, pitch-over speed and angle, dry and propellant mass, automatic or manual trajectory fast-forward |
 | Fluid | viscosity, Smagorinsky constant, tracer fade |
 | Domain & solver | body-fitted nozzle grid, plume domain length, radial domain, axial cell stretch, radial cells, CFL, frame budget |
 | Measurement | position of the measurement plane relative to the exit |
+| Export | video field, format, resolution and bitrate; series CSV |
+| Validation | re-runs the checks behind docs/validation.md |
 
 ---
 
@@ -193,6 +195,24 @@ Rounded: ellipsoidal, zero slope at the shoulder.
 
 In all three the external flow separates off the base annulus and the plume acts as an
 aerodynamic body.
+
+### Reading the run
+
+The plot at the foot of the window takes any of twenty recorded series, chosen from the
+**Series** list: exit-plane velocity and Mach, thrust, drag, net force, mass flow, measured Isp,
+chamber and ambient pressure, and the whole trajectory state. Each is drawn to its own range,
+with current value and range in the key, since the units do not share a scale. The same twenty
+columns come out of **Export series CSV**, and exporting all fields writes the CSV alongside
+the video.
+
+Vertical flight stops itself at apogee, since the solver only represents nose-first flight into
+the freestream and nothing past that point is valid.
+
+Fast-forward is on automatic by default. A burn lasting seconds has to be paid for in
+milliseconds of flow time, and the flow needs about 2 ms to settle, so the ratio between them
+is bounded by how fast the conditions are allowed to move while the flow catches up. The panel
+reports the resulting trajectory error as a percentage rather than only complaining past a
+threshold; measured against the V-2 case it tracks the error in apogee closely.
 
 ### Thrust and drag
 
