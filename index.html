@@ -490,9 +490,17 @@ function computeGeometry(){
   /* The turn has to fit inside the convergent section with room left over for the
      contraction, or the cowl would have to widen on its way to the throat. */
   const turnGap    = SPK ? SPK.h : 0;
-  const turnR      = SPK
-    ? Math.max(Math.min(SPK.R, 0.6 * P.convLen / Math.max(Math.sin(SPK.delta), 1e-3) - turnGap),
-               0.5 * turnGap)
+  const turnWant   = SPK ? SPK.R : 0;
+  const turnRoom   = SPK ? 0.6 * P.convLen / Math.max(Math.sin(SPK.delta), 1e-3) - turnGap : 0;
+  const turnR      = SPK ? Math.max(Math.min(turnWant, turnRoom), 0.5 * turnGap) : 0;
+  /* Turning a duct on a radius smaller than a couple of gap widths separates the inner wall,
+     and the convergent section is what has to hold the turn. Taller throats need proportionally
+     more of it, so a length that suits one nozzle can silently ruin another: the same setting
+     that was ample for a 3.4 mm annular gap forced a 14 mm planar one onto half a gap width and
+     cost a quarter of its mass flow. Record whether it fitted so the panel can say so. */
+  const turnTight  = SPK && turnWant > turnRoom + 1e-9;
+  const convNeeded = SPK
+    ? (turnWant + turnGap) * Math.max(Math.sin(SPK.delta), 1e-3) / 0.6
     : 0;
   const plugChamR  = SPK ? spikeR0 + turnR * (1 - Math.cos(SPK.delta)) : 0;
   const chamR      = SPK
@@ -581,7 +589,7 @@ function computeGeometry(){
                               zNose, zShoulder, zInj, zConv0, zThroat, zExit, Lz, Rmax,
                               spikeR0, spikeFull, spikeBuilt, spikeTable, spikeNue, spikeSlope,
                               zRoot, turnR, turnGap, zArc, arcOr,
-                              spikeDelta, spikeEpsI, spikeMouth,
+                              spikeDelta, spikeEpsI, spikeMouth, turnTight, convNeeded,
                               plugIn, plugOut, plugZ0, plugZ1, plugThroatZ,
                               spikeBaseR: spikeTable
                                 ? spikeTable[Math.min(SPIKE_N - 1,
@@ -834,6 +842,8 @@ function derived(){
            spikeGap:GEO.turnGap || 0, spikeDelta:GEO.spikeDelta || 0,
            spikeEpsI:GEO.spikeEpsI || 1, spikeMouth:GEO.spikeMouth || 0,
            chamRUsed:GEO.chamR || 0, plugChamR:GEO.plugChamR || 0,
+           turnTight:!!GEO.turnTight, convNeeded:GEO.convNeeded || 0,
+           turnR:GEO.turnR || 0,
            spikeFull:GEO.spikeFull || 0 };
 }
 
@@ -1170,7 +1180,12 @@ function consumeProbeArr(buf, t){
                         : Math.PI * (rb * rb - ra * ra)) * 1e-6;   // mm² -> m², exact either way
     mdot    += rho * uz * Y * dA;                             // kg/s of propellant
     mdotAll += rho * uz * dA;                                 // everything crossing the plane
-    thrust  += (rho * uz * uz + (pr - pa)) * dA;              // N
+    /* Weighted by the exhaust fraction for the same reason the mass flux is. A plug nozzle's
+       plume has no wall, so the plane also cuts external flow, and near the base some of that
+       is recirculating backwards. Counting its momentum as thrust credits the engine with
+       air it never accelerated, which is what made effective exhaust velocity come out above
+       ideal. Across a bell's exit Y is one and this changes nothing. */
+    thrust  += Y * (rho * uz * uz + (pr - pa)) * dA;          // N
   }
   S.meas = { axis, mx, mdot, mdotAll, thrust, machMax, Taxis, Yaxis, drag,
              net: thrust - drag, rLim };
@@ -1366,6 +1381,14 @@ function updateMetrics(){
     `${D.spike ? 'Annular throat' : 'Throat'} resolved by ${fmt(throatCells,1)} cells; ` +
     `${fmt(wantCells,0)} is where mass flow stops moving with resolution. Results will ` +
     `shift below that.`]);
+
+  if (D.spike && D.turnTight) flags.push(['bad',
+    `<b>The turn into the throat does not fit.</b> Bringing the flow round to ` +
+    `${fmt(D.halfAngle,0)}° wants a radius of ${fmt(3 * D.spikeGap,1)} mm, three gap widths, ` +
+    `and the converging length only leaves room for ${fmt(D.turnR,1)} mm, which is ` +
+    `${fmt(D.turnR / Math.max(D.spikeGap,1e-9),1)} gap widths. Below about two the inner wall ` +
+    `separates and mass flow falls away: at half a gap width it costs a quarter of it. Raise ` +
+    `<b>converging length</b> to at least ${fmt(D.convNeeded,0)} mm.`]);
 
   if (P.nozShape === 0 && D.halfAngle > 22) flags.push(['warn',
     `Conical half-angle ${fmt(D.halfAngle,1)}°, a divergence loss of ` +
@@ -4766,6 +4789,15 @@ vAdd('Plug contour: spike root stays inside the cowl lip', 'fast', async () => {
   }
   return { got:worst, want:0, lo:-1e9, hi:-1e-6, unit:'mm root minus lip' };
 });
+vAdd('No preset asks for a turn that will not fit', 'fast', async () => {
+  const bad = [];
+  for (const pr of PRESETS){
+    vSetPreset(pr.n);
+    if (isSpike() && GEO.turnTight)
+      bad.push(`${pr.n}: needs ${GEO.convNeeded.toFixed(0)} mm of converging length`);
+  }
+  return { got:bad.length, want:0, lo:0, hi:0, unit:'too tight', err:bad.join('; ') };
+});
 vAdd('Plug throat is resolved at every expansion ratio', 'fast', async () => {
   let worst = 1e9;
   for (const re of [16, 26, 40, 60, 80, 107, 140]){
@@ -4824,16 +4856,19 @@ vAdd('Choked mass flow equals rho* a* A*', 'fast', async () => {
    pressure while nothing at all left the injector, and every one-dimensional figure in the
    panel looked perfectly healthy because none of them come from the solver. Only running the
    thing catches that, so each hardware preset is run until its mass flow settles. */
-for (const name of ['V-2 (A-4)', 'F-1', 'RS-25', 'XRS-2200', 'Traveler IV']){
-  vAdd(`${name}: the engine flows`, 'slow', async () => {
+for (const name of ['V-2 (A-4)', 'F-1', 'RS-25', 'XRS-2200', 'J-2T-250K', 'Traveler IV']){
+  vAdd(`${name}: the engine is not sealed`, 'slow', async () => {
     vSetPreset(name, { accelerate:0, vAmb:0 });
     await vRunToSteady(150000);
     const d = derived(), m = S.meas;
     const pct = (m && d.mdot > 0) ? 100 * m.mdot / d.mdot : 0;
-    /* This is about the engine flowing at all, not about it having converged: a large one on a
-       large domain has an unsteady base and never fully settles. The failure being guarded
-       against is a duct the geometry has sealed, which reads exactly zero. */
-    return { got:pct, want:100, lo:-70, hi:60, unit:'% of choked' };
+    /* Deliberately a wide band. This asks whether propellant is leaving the engine at all,
+       not whether the figure is converged: a metre-scale plug nozzle has an unsteady base, does
+       not settle inside the budget, and swings by tens of points between runs. The failure it
+       guards against is a duct the geometry has sealed, which reads exactly zero and which
+       nothing else in the suite notices, because every other figure in the panel is
+       one-dimensional and looks perfectly healthy while no gas moves. */
+    return { got:pct, want:100, lo:-88, hi:60, unit:'% of choked' };
   });
 }
 

@@ -325,13 +325,31 @@ continuous ring. That is the difference between hardware and a drawing.
 
 **Status.** The geometry is verified: throat area is height times span to three figures, the
 minimum passage over all spanning surfaces is 1.000 times design, the throat height comes out
-exactly as set, and the axisymmetric path is unchanged with all its checks passing. The
-measured performance is not verified. A planar bell reads 88 % of choked mass flow against 94.7
-% for the axisymmetric equivalent, which is plausible since the two are genuinely different
-nozzles, but a planar plug reads 60 % against 82 %, and a gap that size is not explained by the
-geometry differing. Mass flow is 58 % at the throat itself, so it is not the plume or the
-measurement bound. Until that is accounted for the switch is off by default and its measured
-block should not be trusted for plug nozzles.
+exactly as set, and the axisymmetric path is unchanged with all its checks passing.
+
+Chasing the measured performance turned up two faults, one of which was affecting the
+axisymmetric solver as well.
+
+The first was a silent clamp. Turning a duct on a radius smaller than a couple of gap widths
+separates its inner wall, and the converging section is what has to hold the turn, so a taller
+throat needs proportionally more of it. A planar throat at a given expansion ratio is about four
+times taller than the annular one, and the converging length that was ample for a 3.4 mm annular
+gap forced the 14 mm planar one onto half a gap width. Nothing said so; mass flow was simply a
+quarter lower. Lengthening the converging section from 20 mm to 100 mm took it from 60 % to
+75 %. The panel now refuses this configuration outright and gives the length needed, and a check
+confirms no preset asks for a turn that will not fit.
+
+The second was the thrust integral. Mass flux was weighted by exhaust fraction and momentum flux
+was not, so a plug nozzle was credited with the momentum of entrained air, and near the base with
+air that is recirculating backwards through the measurement plane. That is why effective exhaust
+velocity kept reading above the ideal figure. Across a bell's exit the exhaust fraction is one
+and nothing changes; the axisymmetric plug moves from 100 % to 96 %.
+
+What is still open: a planar plug now reads 68 to 75 % against 79 % axisymmetric, and a planar
+bell 88 % against 94.7 %. Total pressure is flat at 18.9 bar from the injector through to Mach
+1.4, so the duct is clean and the shortfall is the throat not filling. The flux profile across
+it shows deficient layers on both walls. That is as far as this went; the switch stays off by
+default and its measured block is not to be trusted for plug nozzles yet.
 
 ### Why the annular throat is so thin
 
