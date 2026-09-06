@@ -1,87 +1,114 @@
-# Planar mode: open investigation
+# Planar mode: the discharge investigation, and how it resolved
 
-Working notes. Not documentation; this records where the planar (linear-aerospike)
-path stands so the thread can be picked up without re-deriving it.
+Working notes rather than documentation. This records a discrepancy that turned out not to
+exist, three faults that did, and the method that told them apart, so neither the false
+alarm nor the real fixes have to be re-derived.
 
-## What is verified
+## Conclusion first
+
+There is no planar discharge fault. The apparent nine-point gap was an artefact of
+comparing two different engines: the "axisymmetric bell" baseline was a shipped preset with
+a contraction ratio of 9.8 and its own throat, exit and lengths, while the planar case was
+a block of parameters written by hand with a contraction ratio of 3.1. Contraction ratio
+drives discharge coefficient, so most of the gap was that, and the rest was everything else
+that differed.
+
+Held properly fixed, the two geometries agree.
+
+## The controlled comparison
+
+One parameter block, `planar` the only flag that moves. Because throat area goes as the
+square of the radius when revolved and linearly with height when extruded, matching the
+contraction ratio requires different chamber radii: 14.142 mm revolved against 25 mm
+extruded both give 3.125. Everything else is identical, and so is the resulting mesh:
+669 x 112 cells, dz 1349 um, dr 674 um, 27.9 cells across the throat.
+
+Mass flow as a percentage of the one-dimensional choked value, time-averaged over eight
+samples after the transient, plus or minus one standard deviation:
+
+| | axisymmetric | planar |
+|---|---|---|
+| viscous | 84.85 +- 0.73 | 85.68 +- 0.00 |
+| inviscid | 85.35 +- 0.85 | 85.83 +- 0.00 |
+
+Planar is marginally *higher* in both rows, by less than the axisymmetric run's own scatter.
+That is the direction the boundary-layer argument predicts, and the size of the viscous
+debit matches it too: 0.50 points revolved against 0.15 planar, a ratio near the factor of
+two or three expected from a full wetted perimeter against a single wall facing a symmetry
+plane.
+
+Contraction ratio, swept on that same grid with nothing else touched, accounts for the rest:
+
+| axisymmetric, contraction 3.125 | 84.85 +- 0.73 |
+| axisymmetric, contraction 9.77  | 90.74 +- 0.12 |
+
+A planar run at contraction 9.77 reads 88.29 +- 0.39, but it is not a clean pair: matching
+that contraction extruded needs a 78.2 mm half-height, which grows the domain and forces a
+different radial extent and cell count. This is a real limitation of the comparison rather
+than a result. The two geometries cannot hold both contraction ratio and body size fixed at
+once, precisely because area is quadratic in one and linear in the other. The matched
+3.125 pair is the comparison that isolates the solver, and it is clean.
+
+## A separate finding, not a planar issue
+
+The inviscid runs sit at about 85 % of choked, not near 100 %. The bulk of the shortfall is
+numerical, from the resolution of the sonic line at this contraction ratio, and it is the
+same in both geometries. It affects the axisymmetric solver equally and is a distinct
+accuracy question from anything planar.
+
+## What is verified about planar geometry
 
 - Metric weights: every area and volume carries a weight of either the radius or one.
-- Throat area is height times span, expansion ratio is the ratio of the two rather than
-  its square, and the plug contour uses the planar Angelino construction where mass
+- Throat area is height times span, expansion ratio is the ratio of the two rather than its
+  square, and the plug contour uses the planar Angelino construction, where mass
   conservation across a characteristic is a length rather than an area.
 - Minimum passage over all spanning surfaces is 1.000 times design.
 - Throat height comes out exactly as set, unlike the annular case where it is forced to
   A_t/(2 pi r).
-- The axisymmetric path is unchanged: every check still passes.
+- Free-stream preservation at the symmetry plane, after the fix below.
 
-## The discrepancy
+## Three faults found while chasing a discrepancy that was not there
 
-| case | planar | axisymmetric |
-|---|---|---|
-| bell, eps 3.4 | 88 % of choked | 94.7 % |
-| plug, eps 3.45 | 68 to 75 % | 79 % |
+1. **Symmetry-plane flux hard-zeroed.** `fluxR` returned zero flux at `ir == 0` with the
+   comment that the axis has zero face area. True revolved, where anything written there is
+   discarded. Extruded, the centreline is a symmetry plane with real area, so zeroing it
+   left the first row of cells with pressure on one side and nothing on the other. Caught by
+   a rest test with the engine off, uniform pressure, fluid at rest: the axisymmetric case
+   held at 0.02 m/s, the planar case generated **231.55 m/s**, all of it at the centreline.
+   Fixed by reflecting the state through the plane and letting the Riemann solver produce
+   pure pressure and no transport, which is what a symmetry plane is and which costs nothing
+   revolved. Planar rest test now reads 0.01 m/s.
 
-Total pressure is flat at 18.9 bar from the injector through to Mach 1.4, so the duct is
-clean and there is no upstream loss. Mass flow reads the same at the throat as downstream,
-so it is not the plume or the measurement bound. The flux profile across the throat shows
-deficient layers on both walls.
+   This was a serious correctness bug and it did not close the discharge gap, which is what
+   eventually pointed at the comparison rather than the code.
 
-The direction is the anomaly. An axisymmetric throat has wall all the way round it, so its
-area deficit goes as 2 delta*/R. A planar half-slot has one wall and a symmetry plane, so
-its deficit should go as delta*/h, which is *less*. Planar reading worse than axisymmetric
-is backwards from that argument, which is why this looks like a fault rather than a
-difference between two genuinely different nozzles.
+2. **Axisymmetric-only viscous terms active in planar.** `muEff` formed the hoop strain
+   `u_r / r` and fed its square into the Smagorinsky invariant; the radial momentum
+   Laplacian carried `- u_r / r^2`; the dilatation carried `+ u_r / r`. None exist in a
+   planar slice, and with fluid sitting on the symmetry plane rather than metal, they blow
+   up in the middle of the jet. Now switched off when planar, with the four transverse
+   Laplacians routed through a helper that carries the radius weighting only when revolved.
+   Correct, and worth having, but it moved the number by nothing at all.
 
-## Ruled out
-
-- Upstream stagnation pressure loss: flat to Mach 1.4.
-- Plume clipping or the tracer-bounded measurement radius: same figure at the throat.
-- The 1-D reference: A_t = height times span checks out against an independent calculation.
-- Geometry: minimum passage is 1.000 times design.
-- The turn radius clamp (see below): fixing it moved 60 % to 75 %, and 75 % is still short
-  of 79 %.
-
-## Leading suspect
-
-The viscous terms carry axisymmetric-only pieces that were never switched:
-
-- `muEff` forms the hoop strain `stt = u_r / r` and feeds `stt^2` into the Smagorinsky
-  strain invariant.
-- The radial momentum Laplacian carries `- u_r / r^2`.
-- The dilatation carries `+ u_r / r`.
-
-None of these exist in a planar slice. Worse, in planar the symmetry plane is at y = 0 and
-the flow fills the region right down to it, so `r -> 0` inside the nozzle core rather than
-inside solid metal. Those terms then blow up exactly where the flow is, producing spurious
-eddy viscosity and a spurious transverse momentum source through the middle of the jet.
-
-In the axisymmetric case the equivalent region is the axis, which for a bell is genuinely
-the centre of the flow too, but the terms are correct there.
-
-## Two faults already found and fixed while chasing this
-
-1. **Silent turn clamp.** Turning a duct on a radius under a couple of gap widths separates
-   its inner wall. The converging section holds the turn, so a taller throat needs more of
-   it. The code clamped the radius to half a gap width and said nothing.
-   **Caveat on the headline number:** the configuration that triggered this was one written
-   by hand for testing, taking the axisymmetric preset and switching it to planar, which
-   makes the throat four times taller while leaving the converging length at 20 mm. No real
-   engine hit it: the planar XRS-2200 needs 164 mm and has 400. So the 60 % to 75 % gain
-   was fixing a bad test setup, not a simulator fault, and it does **not** account for the
-   remaining discrepancy. The silent clamp is still a genuine defect in error reporting and
-   is now refused outright with the required length quoted.
-
-2. **Thrust integral not weighted by exhaust fraction** while the mass flux was, so a plug
+3. **Thrust integral not weighted by exhaust fraction** while the mass flux was, so a plug
    nozzle was credited with entrained air momentum, and near the base with air recirculating
-   backwards through the plane. This affected the axisymmetric solver too: effective exhaust
-   velocity had been reading above ideal, which cannot happen. Bells are unaffected because
-   their exhaust fraction is one across the exit.
+   backwards through the plane. This one reached the axisymmetric solver too: effective
+   exhaust velocity had been reading above ideal, which cannot happen. Bells are unaffected,
+   their exhaust fraction being one across the exit.
 
-## Next steps
+Also fixed, and also not the cause: a **silent turn-radius clamp**. Turning a duct on a
+radius under a couple of gap widths separates its inner wall; the code clamped to half a gap
+width and said nothing. The configuration that triggered it was hand-written for testing,
+taking the axisymmetric preset and flipping it to planar, which makes the throat four times
+taller while leaving the converging length at 20 mm. No shipped preset hits it: the planar
+XRS-2200 needs 164 mm and has 400. So the 60 % to 75 % improvement fixed a bad test setup,
+not the simulator. The silent clamp was still a genuine error-reporting defect and is now
+refused outright with the required length quoted.
 
-1. Switch off the hoop terms in the viscous block and `muEff` when planar, and re-measure
-   the planar bell. If it moves to about 95 % that is the answer.
-2. If not, run the planar bell inviscid. Viscosity being irrelevant would rule the whole
-   block out and point at the flux or boundary treatment instead.
-3. A planar resolution sweep, run with enough budget to actually settle; the earlier attempt
-   at 224 radial cells hit the time limit mid-transient and told us nothing.
+## The methodological lesson
+
+Twice in this investigation the anomaly was in the test harness, not the solver, and both
+times the harness looked reasonable. What settled it was building a single parameter block
+in which exactly one flag moves and then checking the resulting mesh dimensions matched
+before trusting either number. Any planar-against-axisymmetric comparison should start by
+printing the grid for both and refusing to proceed if they differ.

@@ -2209,7 +2209,20 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
   let iz = i32(g.x); let ir = i32(g.y);
   if (iz >= P.cells.x || ir > P.cells.y) { return; }
   let fi = u32(ir * P.cells.x + iz);
-  if (ir == 0) { Fr[fi] = Flux(vec4<f32>(0.0), 0.0); return; }   // axis: face area is zero
+  /* The centreline. Revolved it is the axis and its face area is zero, so anything written
+     here is discarded; extruded it is a symmetry plane with real area, and zeroing the flux
+     leaves the first row of cells with pressure on one side and nothing on the other. That
+     drove 230 m/s out of fluid that was sitting still. Reflecting the state through the plane
+     and letting the Riemann solver do the rest gives pure pressure and no transport, which is
+     what a symmetry plane is, and costs nothing in the revolved case. */
+  if (ir == 0) {
+    let nrm0 = faceArN(iz, 0);
+    let wI = rotToN(Wat(iz, 0), nrm0);
+    let F0 = hllc(floorPrim(reflectN(wI)), floorPrim(wI));
+    Fr[fi] = Flux(vec4<f32>(F0.f.x, F0.f.y * nrm0.x - F0.f.z * nrm0.y,
+                            F0.f.y * nrm0.y + F0.f.z * nrm0.x, F0.f.w), F0.y);
+    return;
+  }
 
   let bL = blocked(iz, max(ir - 1, 0));
   let bR = blocked(iz, min(ir, P.cells.y - 1));
@@ -2248,6 +2261,13 @@ fn fluxR(@builtin(global_invocation_id) g : vec3<u32>) {
    The caller has already loaded the four neighbours, so they are passed in rather than
    fetched again: every primitive costs two buffer loads now that the mass fraction has to
    come with it, and this kernel is memory bound. */
+/* Transverse Laplacian. Revolved it carries the radius weighting that makes it the radial
+   part of the cylindrical operator; in a planar slice it is the plain second difference. */
+fn radialLap(rR : f32, rL : f32, rc : f32, dr2 : f32, an : f32, a0 : f32, asv : f32) -> f32 {
+  if (isPlanar()) { return (an - 2.0 * a0 + asv) / dr2; }
+  return (rR * (an - a0) - rL * (a0 - asv)) / (rc * dr2);
+}
+
 fn muEff(iz : i32, ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
          wn : vec4<f32>, ws : vec4<f32>) -> f32 {
   var nu = P.flu.x;
@@ -2258,7 +2278,11 @@ fn muEff(iz : i32, ir : i32, w0 : vec4<f32>, wp : vec4<f32>, wm : vec4<f32>,
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
     let durdz = (wp.z - wm.z) / (2.0 * dz);
-    let stt = w0.z / max(rc, 1e-6);
+    /* Hoop strain exists only when the slice is revolved. In a planar slice there is no
+       third direction for the flow to stretch into, and the symmetry plane sits at y = 0
+       with fluid on it, so u/y would blow up in the middle of the jet rather than inside
+       solid metal. */
+    let stt = select(w0.z / max(rc, 1e-6), 0.0, isPlanar());
     let srz = 0.5 * (duzdr + durdz);
     let s2 = 2.0 * (duzdz * duzdz + durdr * durdr + stt * stt) + 4.0 * srz * srz;
     let dd = sqrt(dz * dr);
@@ -2355,10 +2379,12 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
     let mu = muEff(iz, ir, w0, wp, wm, wn, ws);
     let dz2 = dz * dz; let dr2 = dr * dr;
     let lapz = (wp.y - 2.0 * w0.y + wm.y) / dz2
-             + ((rR * (wn.y - w0.y) - rL * (w0.y - ws.y)) / (rc * dr2));
-    let lapr = (wp.z - 2.0 * w0.z + wm.z) / dz2
-             + ((rR * (wn.z - w0.z) - rL * (w0.z - ws.z)) / (rc * dr2))
-             - w0.z / (rc * rc);
+             + radialLap(rR, rL, rc, dr2, wn.y, w0.y, ws.y);
+    /* The last term of the radial Laplacian and the hoop part of the dilatation are both
+       axisymmetric only, for the same reason. */
+    var lapr = (wp.z - 2.0 * w0.z + wm.z) / dz2
+             + radialLap(rR, rL, rc, dr2, wn.z, w0.z, ws.z);
+    if (!isPlanar()) { lapr = lapr - w0.z / (rc * rc); }
     L.y = L.y + mu * lapz;
     L.z = L.z + mu * lapr;
     // viscous heating plus conduction, each cell using its own mixture cp and R
@@ -2366,22 +2392,23 @@ fn update(@builtin(global_invocation_id) g : vec3<u32>) {
     let durdr = (wn.z - ws.z) / (2.0 * dr);
     let duzdr = (wn.y - ws.y) / (2.0 * dr);
     let durdz = (wp.z - wm.z) / (2.0 * dz);
-    let divu = duzdz + durdr + w0.z / rc;
-    let phi = mu * (2.0 * (duzdz * duzdz + durdr * durdr + (w0.z / rc) * (w0.z / rc))
+    let hoop = select(w0.z / rc, 0.0, isPlanar());
+    let divu = duzdz + durdr + hoop;
+    let phi = mu * (2.0 * (duzdz * duzdz + durdr * durdr + hoop * hoop)
                     + (duzdr + durdz) * (duzdr + durdz) - (2.0 / 3.0) * divu * divu);
     let kt = mu * cpMix(Y0) / P.gas.z;
     let T0c = w0.w / (w0.x * rMix(Y0));
     let Tp = wp.w / (wp.x * rMix(ap.Y)); let Tm = wm.w / (wm.x * rMix(am.Y));
     let Tn = wn.w / (wn.x * rMix(aup.Y)); let Ts = ws.w / (ws.x * rMix(adn.Y));
     let lapT = (Tp - 2.0 * T0c + Tm) / dz2
-             + ((rR * (Tn - T0c) - rL * (T0c - Ts)) / (rc * dr2));
+             + radialLap(rR, rL, rc, dr2, Tn, T0c, Ts);
     L.w = L.w + phi + kt * lapT + mu * (w0.y * lapz + w0.z * lapr);
 
     /* Species diffusion at unity Schmidt number. With two real gases this is no longer
        cosmetic: an unmixed interface would keep a discontinuous equation of state, and it
        is the sub-grid part that stands in for the turbulent mixing axial symmetry forbids. */
     let lapY = (ap.Y - 2.0 * Y0 + am.Y) / dz2
-             + ((rR * (aup.Y - Y0) - rL * (Y0 - adn.Y)) / (rc * dr2));
+             + radialLap(rR, rL, rc, dr2, aup.Y, Y0, adn.Y);
     Ld = Ld + mu * lapY;
   }
 
