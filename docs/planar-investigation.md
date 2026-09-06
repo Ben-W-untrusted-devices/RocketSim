@@ -112,3 +112,41 @@ times the harness looked reasonable. What settled it was building a single param
 in which exactly one flag moves and then checking the resulting mesh dimensions matched
 before trusting either number. Any planar-against-axisymmetric comparison should start by
 printing the grid for both and refusing to proceed if they differ.
+
+## Postscript: the J-2T-250K read zero, and why
+
+Running the full suite after the fixes above left one check failing: "J-2T-250K: the engine is
+not sealed", reading exactly 0 % of choked. It fails identically on the commit before these
+changes, so it is not a regression from them, but it was a real failure and worth chasing.
+
+It is not a sealed duct. The geometry is right (minimum passage 1.0034 times design, apertures
+open at every station) and the engine fires: field Mach 2.6 at sea level, 5.8 in vacuum, with
+121 kg/s of exhaust crossing the throat against a 258 kg/s ideal.
+
+The fault is where the mass flow was being measured. Mass flow is integrated on the probe
+plane, which sits at `zExit`. For a truncated plug `zExit` is exactly the spike base:
+zRoot + spikeBuilt = 7961 + 1624 = 9585 for the XRS-2200, and 9330 + 2046 = 11376 for the
+J-2T-250K, both equal to their `zExit` to the millimetre. That plane cuts the base
+recirculation, and exhaust arrives there by entrainment rather than with the jet. Tracking the
+tracer front on the XRS-2200 gives 8825 mm at t = 2.10 s, 9061 at 2.69, 9226 at 3.13, 9297 at
+3.38, 9367 at 3.79, 9462 at 4.56: a few hundred millimetres per second, decelerating, against
+a jet moving at kilometres per second. Until that front crosses the plane the integral reads
+exactly zero; when it crosses, at t = 4.94 s, the measurement radius jumps from 18 mm to
+1657 mm and the reading jumps from 0 to 10.6 % in one step.
+
+So the check was timing out rather than measuring. The XRS-2200 crossed with seconds to spare
+and passed at a marginal 10.6 %. The J-2T-250K is the largest preset, needs 2085 mm of front
+travel instead of 1660, and runs at about 39 seconds of wall clock per second of flow time; it
+was still short of the plane when the 150-second budget expired, and reported the zero that
+means a sealed duct.
+
+The check asks whether propellant is leaving the engine at all, so it now asks at the throat:
+the probe plane is moved to 15 % of the way from the throat to the exit whenever the nozzle is
+a plug. A bell's exit plane is a real exit and is left alone. On the same stalled J-2T state
+that read 0 %, moving the plane from 11376 mm to 9604 mm changed the reading to 47.2 %, which
+matches the 121/258 measured directly off the buffers. Both plug presets now pass with margin
+rather than by seconds: XRS-2200 58.5 %, J-2T-250K 52.5 %.
+
+The lesson is the same one as above. A measurement that reads exactly zero deserves to be
+checked against the raw field before it is believed, in either direction: here it was the
+instrument, not the engine.

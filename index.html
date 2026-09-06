@@ -4886,6 +4886,18 @@ vAdd('Choked mass flow equals rho* a* A*', 'fast', async () => {
 for (const name of ['V-2 (A-4)', 'F-1', 'RS-25', 'XRS-2200', 'J-2T-250K', 'Traveler IV']){
   vAdd(`${name}: the engine is not sealed`, 'slow', async () => {
     vSetPreset(name, { accelerate:0, vAmb:0 });
+    /* Ask the question just downstream of the throat rather than at the exit plane. For a
+       truncated plug the exit plane is exactly the spike base, and the base sits inside its own
+       recirculation: exhaust arrives there by entrainment at a few hundred mm/s instead of with
+       the jet at kilometres per second, so the integral reads exactly zero for the first several
+       seconds of flow time. That is indistinguishable from a sealed duct, and on the largest
+       preset it never cleared inside the budget, so the check was timing out rather than
+       measuring. The J-2T-250K read 0 % where the throat was passing 47 %. A bell's exit plane
+       is a real exit and is left alone. */
+    if (isSpike()){
+      const zT = GEO.plugThroatZ || GEO.zThroat;
+      P.probe = (zT - GEO.zExit) + 0.15 * (GEO.zExit - zT);
+    }
     await vRunToSteady(150000);
     const d = derived(), m = S.meas;
     const pct = (m && d.mdot > 0) ? 100 * m.mdot / d.mdot : 0;
