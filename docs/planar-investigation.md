@@ -150,3 +150,10 @@ rather than by seconds: XRS-2200 58.5 %, J-2T-250K 52.5 %.
 The lesson is the same one as above. A measurement that reads exactly zero deserves to be
 checked against the raw field before it is believed, in either direction: here it was the
 instrument, not the engine.
+
+## Suite state
+
+All 33 checks pass on the current code. The reference bell reads 94.69 % of choked, unchanged
+from before the symmetry-plane fix, so the revolved path is untouched by it; uniform ambient
+still integrates to 0.00 N of drag; the aerospike reads 78.52 % mass flow and 96.11 % exhaust
+velocity; the two plug seal checks now read 58.5 % and 52.5 % instead of 10.6 % and 0 %.
